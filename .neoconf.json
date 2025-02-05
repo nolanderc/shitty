@@ -1,0 +1,7 @@
+{
+    "lspconfig": {
+        "zls": {
+            "zls.force_autofix": true
+        }
+    }
+}
