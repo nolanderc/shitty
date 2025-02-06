@@ -10,6 +10,8 @@
     zig-overlay.inputs.flake-utils.follows = "flake-utils";
 
     zls.url = "github:zigtools/zls";
+    zls.inputs.nixpkgs.follows = "nixpkgs";
+    zls.inputs.zig-overlay.follows = "zig-overlay";
   };
 
   outputs =
