@@ -10,7 +10,8 @@ pkgs.mkShell {
 
     # Dependencies
     pkgs.sdl3.dev
-    (pkgs.callPackage ./SDL3_ttf.nix { inherit pkgs; })
-    pkgs.fontconfig
+    pkgs.fontconfig.dev
+    pkgs.freetype.dev
+    pkgs.harfbuzz.dev
   ];
 }

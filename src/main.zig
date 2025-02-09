@@ -25,9 +25,6 @@ fn run(alloc: std.mem.Allocator) !void {
     if (!c.SDL_Init(c.SDL_INIT_VIDEO | c.SDL_INIT_EVENTS)) return error.SdlInit;
     defer c.SDL_Quit();
 
-    if (!c.TTF_Init()) return error.SdlTtfInit;
-    defer c.TTF_Quit();
-
     const window = c.SDL_CreateWindow(
         "shitty",
         800,
@@ -52,6 +49,8 @@ fn run(alloc: std.mem.Allocator) !void {
     };
     defer app.deinit();
 
+    try app.redraw();
+
     while (app.running) {
         var event: c.SDL_Event = undefined;
 
@@ -62,12 +61,15 @@ fn run(alloc: std.mem.Allocator) !void {
             try app.handleEvent(event);
         }
 
-        app.redraw() catch |err| {
-            logSDL.err("could not redraw screen: {}", .{err});
-            if (@errorReturnTrace()) |error_trace| {
-                std.debug.dumpStackTrace(error_trace.*);
-            }
-        };
+        if (app.needs_redraw) {
+            app.needs_redraw = false;
+            app.redraw() catch |err| {
+                logSDL.err("could not redraw screen: {}", .{err});
+                if (@errorReturnTrace()) |error_trace| {
+                    std.debug.dumpStackTrace(error_trace.*);
+                }
+            };
+        }
     }
 }
 
@@ -78,6 +80,7 @@ const App = struct {
 
     window: *c.SDL_Window,
     surface: *c.SDL_Surface,
+    needs_redraw: bool = true,
 
     text: std.ArrayListUnmanaged(u8) = .{},
     font_manager: *FontManager,
@@ -93,18 +96,42 @@ const App = struct {
             },
 
             c.SDL_EVENT_TEXT_INPUT => {
-                std.log.info("text: {s}", .{event.text.text});
-                try app.text.appendSlice(app.alloc, std.mem.span(event.text.text));
+                try app.pushText(std.mem.span(event.text.text));
             },
 
             c.SDL_EVENT_KEY_DOWN => {
                 const shift = (c.SDL_KMOD_SHIFT & event.key.mod) != 0;
-                if (shift and event.key.key == c.SDLK_ESCAPE) {
-                    app.running = false;
+                const ctrl = (c.SDL_KMOD_CTRL & event.key.mod) != 0;
+                const alt = (c.SDL_KMOD_ALT & event.key.mod) != 0;
+                _ = alt; // autofix
+
+                switch (event.key.key) {
+                    c.SDLK_ESCAPE => {
+                        if (shift) app.running = false;
+                    },
+                    c.SDLK_TAB => try app.pushText("😀🎉🌟🍕🚀"),
+                    c.SDLK_RETURN => try app.pushText("\n"),
+                    c.SDLK_1 => {
+                        if (ctrl) {
+                            try app.font_manager.setSize(app.font_manager.ptsize / 1.1);
+                            app.needs_redraw = true;
+                        }
+                    },
+                    c.SDLK_2 => {
+                        if (ctrl) {
+                            try app.font_manager.setSize(app.font_manager.ptsize * 1.1);
+                            app.needs_redraw = true;
+                        }
+                    },
+                    else => {},
                 }
 
+                if (event.key.key == c.SDLK_RETURN) {
+                    try app.pushText("\n");
+                    return;
+                }
                 if (event.key.key == c.SDLK_TAB) {
-                    try app.text.appendSlice(app.alloc, "😀 🎉 🌟 🍕 🚀");
+                    return;
                 }
             },
 
@@ -112,8 +139,16 @@ const App = struct {
                 app.surface = c.SDL_GetWindowSurface(app.window) orelse return error.SdlWindowSurface;
             },
 
+            c.SDL_EVENT_WINDOW_EXPOSED => app.needs_redraw = true,
+
             else => {},
         }
+    }
+
+    fn pushText(app: *App, text: []const u8) !void {
+        std.log.debug("pushText({})", .{std.json.fmt(text, .{})});
+        try app.text.appendSlice(app.alloc, text);
+        app.needs_redraw = true;
     }
 
     pub fn redraw(app: *App) !void {

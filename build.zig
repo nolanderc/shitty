@@ -3,6 +3,7 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const use_llvm = b.option(bool, "use-llvm", "Use LLVM codegen");
 
     const exe = b.addExecutable(.{
         .name = "shitty",
@@ -11,6 +12,8 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         }),
+        .use_llvm = use_llvm,
+        .use_lld = use_llvm,
     });
     b.installArtifact(exe);
 
@@ -18,8 +21,9 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("c", c);
     exe.linkLibC();
     exe.linkSystemLibrary("SDL3");
-    exe.linkSystemLibrary("SDL3_ttf");
     exe.linkSystemLibrary("fontconfig");
+    exe.linkSystemLibrary("freetype");
+    exe.linkSystemLibrary("harfbuzz");
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
