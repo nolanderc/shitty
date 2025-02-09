@@ -1,6 +1,8 @@
 const std = @import("std");
 const c = @import("c").includes;
 
+const Buffer = @import("Buffer.zig");
+
 const FontManager = @This();
 
 const logFC = std.log.scoped(.FontConfig);
@@ -44,9 +46,9 @@ pub const GlyphRaster = struct {
 };
 
 pub const Metrics = struct {
-    line_height: f32,
-    ascender: f32,
-    descender: f32,
+    cell_height: f32,
+    cell_width: f32,
+    baseline: f32,
 };
 
 pub fn deinit(manager: *FontManager) void {
@@ -119,38 +121,43 @@ fn computeMetrics(manager: *FontManager) Metrics {
     const primary_index = manager.styles.get(.regular).faces[0];
     const primary: *c.FT_FaceRec = manager.faces.items[@intFromEnum(primary_index)].ft;
     const pt_scale = manager.ptsize / std.math.lossyCast(f32, primary.units_per_EM);
+
     const line_height = pt_scale * std.math.lossyCast(f32, primary.height);
-    const ascender = pt_scale * std.math.lossyCast(f32, primary.ascender);
+    const advance = pt_scale * std.math.lossyCast(f32, primary.max_advance_width);
     const descender = pt_scale * std.math.lossyCast(f32, primary.descender);
+
+    const cell_width = @ceil(advance);
+    const cell_height = @ceil(line_height);
+
     return .{
-        .line_height = line_height,
-        .ascender = ascender,
-        .descender = descender,
+        .cell_width = cell_width,
+        .cell_height = cell_height,
+        .baseline = cell_height + descender,
     };
 }
 
-pub fn draw(manager: *FontManager, surface: *c.SDL_Surface, string: []const u8, style: Style) !void {
-    var codepoints = Utf8Iterator.init(string);
-    var advance: f32 = 0;
-    var baseline: f32 = manager.metrics.line_height;
-    while (codepoints.next()) |codepoint| {
-        if (codepoint == '\n') {
-            advance = 0;
-            baseline += manager.metrics.line_height;
-            continue;
+pub fn draw(manager: *FontManager, surface: *c.SDL_Surface, buffer: *const Buffer) !void {
+    var row: i32 = 0;
+    var baseline: f32 = manager.metrics.baseline;
+    while (row < buffer.size.rows) : (row += 1) {
+        const cells = buffer.getRow(row);
+
+        var advance: f32 = 0;
+        for (cells) |cell| {
+            const glyph = manager.mapCodepoint(cell.codepoint, .regular) orelse continue;
+            const raster = try manager.getGlyphRaster(glyph);
+
+            _ = c.SDL_BlitSurface(raster.surface, null, surface, &c.SDL_Rect{
+                .x = @intFromFloat(@floor(advance + raster.left)),
+                .y = @intFromFloat(@floor(baseline - raster.top)),
+                .w = raster.surface.w,
+                .h = raster.surface.h,
+            });
+
+            advance += manager.metrics.cell_width;
         }
 
-        const glyph = manager.mapCodepoint(codepoint, style) orelse continue;
-        const raster = try manager.getGlyphRaster(glyph);
-
-        _ = c.SDL_BlitSurface(raster.surface, null, surface, &c.SDL_Rect{
-            .x = @intFromFloat(@floor(advance + raster.left)),
-            .y = @intFromFloat(@floor(baseline - raster.top)),
-            .w = raster.surface.w,
-            .h = raster.surface.h,
-        });
-
-        advance += raster.advance;
+        baseline += manager.metrics.cell_height;
     }
 }
 
@@ -209,7 +216,7 @@ fn rasterizeGlyph(manager: *FontManager, glyph: GlyphKey) !GlyphRaster {
     var scale: f32 = 1.0;
 
     if (is_bitmap) {
-        const target_height: i32 = @intFromFloat(@floor(manager.metrics.line_height));
+        const target_height: i32 = @intFromFloat(@floor(manager.metrics.cell_height));
 
         while (surface.h > target_height) {
             const next_height = @max(target_height, @divTrunc(surface.h, 2));

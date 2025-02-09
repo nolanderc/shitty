@@ -24,6 +24,7 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("fontconfig");
     exe.linkSystemLibrary("freetype");
     exe.linkSystemLibrary("harfbuzz");
+    exe.linkSystemLibrary("utf8proc");
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());

@@ -13,5 +13,6 @@ pkgs.mkShell {
     pkgs.fontconfig.dev
     pkgs.freetype.dev
     pkgs.harfbuzz.dev
+    pkgs.utf8proc
   ];
 }

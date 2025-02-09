@@ -7,4 +7,6 @@ pub const includes = @cImport({
     @cInclude("freetype/freetype.h");
     @cInclude("harfbuzz/hb.h");
     @cInclude("harfbuzz/hb-ft.h");
+
+    @cInclude("utf8proc.h");
 });
