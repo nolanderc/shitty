@@ -14,5 +14,6 @@ pkgs.mkShell {
     pkgs.freetype.dev
     pkgs.harfbuzz.dev
     pkgs.utf8proc
+    pkgs.wayland.dev
   ];
 }

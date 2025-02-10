@@ -18,6 +18,8 @@ glyph_cache: std.AutoHashMapUnmanaged(GlyphKey, GlyphRaster) = .{},
 ptsize: f32,
 metrics: Metrics,
 
+unmappable_codepoints: std.AutoHashMapUnmanaged(u21, void) = .{},
+
 pub const Style = enum {
     regular,
     bold,
@@ -67,6 +69,7 @@ fn clearGlyphCache(manager: *FontManager) void {
     var glyphs = manager.glyph_cache.valueIterator();
     while (glyphs.next()) |raster| raster.deinit();
     manager.glyph_cache.clearRetainingCapacity();
+    manager.unmappable_codepoints.clearAndFree(manager.alloc);
 }
 
 pub fn init(alloc: std.mem.Allocator, family: [*:0]const u8, ptsize: f32) !FontManager {
@@ -268,7 +271,12 @@ fn mapCodepoint(manager: *FontManager, codepoint: u21, style: Style) ?GlyphKey {
             if (glyph_index == 0) continue;
             return .{ .face = face_index, .index = @intCast(glyph_index) };
         } else {
-            logFT.warn("could not map codepoint: {} ({u})", .{ query, query });
+            if (manager.unmappable_codepoints.getOrPut(manager.alloc, query) catch null) |gop| {
+                if (!gop.found_existing) {
+                    logFT.warn("could not map codepoint: {} ({u})", .{ query, query });
+                }
+            }
+
             if (query == std.unicode.replacement_character) return null;
             query = std.unicode.replacement_character;
         }

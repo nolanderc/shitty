@@ -24,6 +24,9 @@ pub fn main() !void {
 }
 
 fn run(alloc: std.mem.Allocator) !void {
+    _ = c.SDL_SetHint(c.SDL_HINT_FRAMEBUFFER_ACCELERATION, "0");
+    _ = c.SDL_SetHint(c.SDL_HINT_NO_SIGNAL_HANDLERS, "1");
+
     if (!c.SDL_Init(c.SDL_INIT_VIDEO | c.SDL_INIT_EVENTS)) return error.SdlInit;
     defer c.SDL_Quit();
 
@@ -35,7 +38,6 @@ fn run(alloc: std.mem.Allocator) !void {
     ) orelse return error.SdlWindow;
     defer c.SDL_DestroyWindow(window);
 
-    _ = c.SDL_SetHint(c.SDL_HINT_FRAMEBUFFER_ACCELERATION, "0");
     const surface = c.SDL_GetWindowSurface(window) orelse return error.SdlWindowSurface;
 
     if (!c.SDL_StartTextInput(window)) return error.SdlTextInput;
@@ -50,7 +52,7 @@ fn run(alloc: std.mem.Allocator) !void {
     var buffer = try Buffer.init(alloc, initial_buffer_size);
     defer buffer.deinit(alloc);
 
-    const shell = shell: {
+    var shell = shell: {
         var terminal = try pty.open(.{
             .cols = std.math.lossyCast(u16, buffer.size.cols),
             .rows = std.math.lossyCast(u16, buffer.size.rows),
@@ -62,37 +64,84 @@ fn run(alloc: std.mem.Allocator) !void {
     };
     defer shell.deinit();
 
-    var read_buffer: [1024]u8 = undefined;
-    while (true) {
-        const count = try shell.io.read(&read_buffer);
-        if (count == 0) break;
-        const bytes = read_buffer[0..count];
-        std.log.info("bytes: {}", .{std.json.fmt(bytes, .{})});
-    }
-
     var app = App{
         .alloc = alloc,
         .window = window,
         .surface = surface,
         .font_manager = &font_manager,
         .buffer = &buffer,
+        .output_buffer = App.OutputBuffer.init(alloc),
     };
     defer app.deinit();
-
     try app.redraw();
 
+    try runEventLoop(&app, &shell);
+}
+
+fn runEventLoop(app: *App, shell: *pty.Shell) !void {
+    const display_fd = sdlFileDescriptor(app.window) orelse return error.MissingDisplayFileDescriptor;
+    std.log.info("Display FD: {}", .{display_fd});
+
+    _ = try std.posix.fcntl(
+        shell.io.handle,
+        std.posix.F.SETFD,
+        @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true })),
+    );
+
     while (app.running) {
-        var event: c.SDL_Event = undefined;
+        var poll_fds = [_]std.posix.pollfd{
+            // wait for new SDL events.
+            .{ .fd = display_fd, .events = std.posix.POLL.IN, .revents = 0 },
+            // Wait for new input from the shell.
+            .{ .fd = shell.io.handle, .events = std.posix.POLL.IN, .revents = 0 },
+        };
 
-        if (!c.SDL_WaitEvent(&event)) break;
-        try app.handleEvent(event);
+        const poll_display = &poll_fds[0];
+        const poll_shell = &poll_fds[1];
 
-        while (c.SDL_PollEvent(&event)) {
-            try app.handleEvent(event);
+        if (app.output_buffer.count != 0) {
+            // wait until we can write to the shell
+            poll_shell.events |= std.posix.POLL.OUT;
+        }
+
+        _ = try std.posix.poll(&poll_fds, -1);
+        for (poll_fds) |fd| {
+            if (fd.revents & std.posix.POLL.NVAL != 0) {
+                std.log.err("file descriptor unexpectedly closed", .{});
+                return error.PollInvalid;
+            }
+        }
+
+        if (poll_display.revents & std.posix.POLL.IN != 0) {
+            var event: c.SDL_Event = undefined;
+            while (c.SDL_PollEvent(&event)) {
+                try app.handleEvent(event);
+            }
+        }
+
+        while (app.output_buffer.count != 0) {
+            const buffer = app.output_buffer.readableSlice(0);
+            const count = shell.io.write(buffer) catch |err| blk: {
+                if (err == error.WouldBlock) break :blk 0;
+                return err;
+            };
+            if (count == 0) break;
+            app.output_buffer.discard(count);
+        }
+
+        if (poll_shell.revents & std.posix.POLL.IN != 0) {
+            var read_buffer: [std.mem.page_size]u8 align(std.mem.page_size) = undefined;
+            const count = shell.io.read(&read_buffer) catch |err| blk: {
+                if (err == error.WouldBlock) break :blk 0;
+                return err;
+            };
+            if (count > 0) {
+                const bytes = read_buffer[0..count];
+                try app.recv(bytes);
+            }
         }
 
         if (app.needs_redraw) {
-            app.needs_redraw = false;
             app.redraw() catch |err| {
                 logSDL.err("could not redraw screen: {}", .{err});
                 if (@errorReturnTrace()) |error_trace| {
@@ -101,6 +150,44 @@ fn run(alloc: std.mem.Allocator) !void {
             };
         }
     }
+}
+
+fn sdlFileDescriptor(window: *c.SDL_Window) ?std.posix.fd_t {
+    const Platforms = struct {
+        fn getX11(props: u32) ?std.posix.fd_t {
+            const prop_name = c.SDL_PROP_WINDOW_X11_DISPLAY_POINTER;
+            const display = c.SDL_GetPointerProperty(props, prop_name, null) orelse return null;
+
+            const lib = c.SDL_LoadObject("libX11.so") orelse return null;
+            defer c.SDL_UnloadObject(lib);
+            const sym = c.SDL_LoadFunction(lib, "XConnectionNumber") orelse return null;
+
+            const XConnectionNumber: *const fn (*anyopaque) callconv(.C) std.posix.fd_t = @ptrCast(sym);
+            return XConnectionNumber(@ptrCast(display));
+        }
+
+        fn getWayland(props: u32) ?std.posix.fd_t {
+            const prop_name = c.SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER;
+            const display = c.SDL_GetPointerProperty(props, prop_name, null) orelse return null;
+
+            const lib = c.SDL_LoadObject("libwayland-client.so") orelse return null;
+            defer c.SDL_UnloadObject(lib);
+            const sym = c.SDL_LoadFunction(lib, "wl_display_get_fd") orelse return null;
+
+            const wl_display_get_fd: *const fn (*anyopaque) std.posix.fd_t = @ptrCast(sym);
+            return wl_display_get_fd(display);
+        }
+    };
+
+    const props = c.SDL_GetWindowProperties(window);
+
+    std.log.info("testing X11", .{});
+    if (Platforms.getX11(props)) |fd| return fd;
+
+    std.log.info("testing Wayland", .{});
+    if (Platforms.getWayland(props)) |fd| return fd;
+
+    return null;
 }
 
 fn getWindowSize(window: *c.SDL_Window) ![2]u32 {
@@ -128,12 +215,16 @@ const App = struct {
     surface: *c.SDL_Surface,
     needs_redraw: bool = true,
 
-    text: std.ArrayListUnmanaged(u8) = .{},
     font_manager: *FontManager,
     buffer: *Buffer,
 
+    /// Bytes that should be written to the shell at the next oppurtunity.
+    output_buffer: OutputBuffer,
+
+    const OutputBuffer = std.fifo.LinearFifo(u8, .Dynamic);
+
     pub fn deinit(app: *App) void {
-        app.text.deinit(app.alloc);
+        app.output_buffer.deinit();
     }
 
     pub fn handleEvent(app: *App, event: c.SDL_Event) !void {
@@ -143,7 +234,7 @@ const App = struct {
             },
 
             c.SDL_EVENT_TEXT_INPUT => {
-                try app.pushText(std.mem.span(event.text.text));
+                try app.send(std.mem.span(event.text.text));
             },
 
             c.SDL_EVENT_KEY_DOWN => {
@@ -151,19 +242,19 @@ const App = struct {
                 const ctrl = (c.SDL_KMOD_CTRL & event.key.mod) != 0;
 
                 switch (event.key.key) {
-                    c.SDLK_ESCAPE => {
-                        if (shift) app.running = false;
-                    },
-                    c.SDLK_TAB => try app.pushText("😀🎉🌟🍕🚀"),
-                    c.SDLK_RETURN => {
-                        try app.pushText("\n");
-                    },
+                    c.SDLK_TAB => try app.send("😀🎉🌟🍕🚀"),
+                    c.SDLK_RETURN => try app.send("\n"),
+
                     c.SDLK_1 => {
                         if (ctrl) try app.adjustFontSize(1.0 / 1.1);
                     },
                     c.SDLK_2 => {
                         if (ctrl) try app.adjustFontSize(1.1);
                     },
+                    c.SDLK_ESCAPE => {
+                        if (shift) app.running = false;
+                    },
+
                     else => {},
                 }
             },
@@ -194,8 +285,12 @@ const App = struct {
         app.buffer.* = new_buffer;
     }
 
-    fn pushText(app: *App, text: []const u8) !void {
-        var remaining = text;
+    fn send(app: *App, bytes: []const u8) !void {
+        try app.output_buffer.write(bytes);
+    }
+
+    fn recv(app: *App, bytes: []const u8) !void {
+        var remaining = bytes;
         while (remaining.len != 0) {
             const len = std.unicode.utf8ByteSequenceLength(remaining[0]) catch {
                 app.buffer.write(std.unicode.replacement_character);
@@ -218,6 +313,8 @@ const App = struct {
     }
 
     pub fn redraw(app: *App) !void {
+        app.needs_redraw = false;
+
         if (!c.SDL_ClearSurface(app.surface, 0.0, 0.0, 0.0, 1.0)) return error.SdlClearSurface;
 
         try app.font_manager.draw(app.surface, app.buffer);

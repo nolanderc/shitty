@@ -3,7 +3,7 @@ run:
     zig build -freference-trace run
 
 watch:
-    zig build -freference-trace -fincremental -Duse-llvm=false --watch
+    zig build -fincremental -Duse-llvm=false --watch --prominent-compile-errors
 
 build:
     zig build
