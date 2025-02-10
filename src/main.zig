@@ -39,7 +39,8 @@ fn run(alloc: std.mem.Allocator) !void {
 
     if (!c.SDL_StartTextInput(window)) return error.SdlTextInput;
 
-    var font_manager = try FontManager.init(alloc, "Comic Code", 16.0);
+    const scale = c.SDL_GetWindowDisplayScale(window);
+    var font_manager = try FontManager.init(alloc, "Comic Code", scale * 14.0);
     defer font_manager.deinit();
 
     const initial_buffer_size = try computeBufferSize(window, &font_manager, 1e3);
