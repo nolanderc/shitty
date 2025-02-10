@@ -2,6 +2,7 @@ const std = @import("std");
 const c = @import("c").includes;
 const FontManager = @import("FontManager.zig");
 const Buffer = @import("Buffer.zig");
+const pty = @import("pty.zig");
 
 const logSDL = std.log.scoped(.SDL);
 
@@ -43,9 +44,31 @@ fn run(alloc: std.mem.Allocator) !void {
     var font_manager = try FontManager.init(alloc, "Comic Code", scale * 14.0);
     defer font_manager.deinit();
 
-    const initial_buffer_size = try computeBufferSize(window, &font_manager, 1e3);
+    const window_size = try getWindowSize(window);
+
+    const initial_buffer_size = try computeBufferSize(window_size, &font_manager, 1e3);
     var buffer = try Buffer.init(alloc, initial_buffer_size);
     defer buffer.deinit(alloc);
+
+    const shell = shell: {
+        var terminal = try pty.open(.{
+            .cols = std.math.lossyCast(u16, buffer.size.cols),
+            .rows = std.math.lossyCast(u16, buffer.size.rows),
+            .pixels_x = std.math.lossyCast(u16, window_size[0]),
+            .pixels_y = std.math.lossyCast(u16, window_size[1]),
+        });
+        errdefer terminal.deinit();
+        break :shell try terminal.exec();
+    };
+    defer shell.deinit();
+
+    var read_buffer: [1024]u8 = undefined;
+    while (true) {
+        const count = try shell.io.read(&read_buffer);
+        if (count == 0) break;
+        const bytes = read_buffer[0..count];
+        std.log.info("bytes: {}", .{std.json.fmt(bytes, .{})});
+    }
 
     var app = App{
         .alloc = alloc,
@@ -80,16 +103,18 @@ fn run(alloc: std.mem.Allocator) !void {
     }
 }
 
-fn computeBufferSize(window: *c.SDL_Window, font: *const FontManager, scrollback: u32) !Buffer.Size {
+fn getWindowSize(window: *c.SDL_Window) ![2]u32 {
     var width: c_int = undefined;
     var height: c_int = undefined;
     if (!c.SDL_GetWindowSize(window, &width, &height)) return error.MissingWindowSize;
+    return .{ @abs(width), @abs(height) };
+}
 
+fn computeBufferSize(window_size: [2]u32, font: *const FontManager, scrollback: u32) !Buffer.Size {
     const metrics = font.metrics;
-
     return .{
-        .rows = @max(1, @as(u32, @intFromFloat(@floor(std.math.lossyCast(f32, height) / metrics.cell_height)))),
-        .cols = @max(1, @as(u32, @intFromFloat(@floor(std.math.lossyCast(f32, width) / metrics.cell_width)))),
+        .rows = @max(1, @as(u32, @intFromFloat(@floor(std.math.lossyCast(f32, window_size[1]) / metrics.cell_height)))),
+        .cols = @max(1, @as(u32, @intFromFloat(@floor(std.math.lossyCast(f32, window_size[0]) / metrics.cell_width)))),
         .scrollback_rows = scrollback,
     };
 }
@@ -161,7 +186,8 @@ const App = struct {
     }
 
     fn updateBufferSize(app: *App) !void {
-        const new_buffer_size = try computeBufferSize(app.window, app.font_manager, app.buffer.size.scrollback_rows);
+        const window_size = try getWindowSize(app.window);
+        const new_buffer_size = try computeBufferSize(window_size, app.font_manager, app.buffer.size.scrollback_rows);
         var new_buffer = try Buffer.init(app.alloc, new_buffer_size);
         app.buffer.reflowInto(&new_buffer);
         app.buffer.deinit(app.alloc);
