@@ -88,12 +88,14 @@ fn runEventLoop(app: *App, shell: *pty.Shell) !void {
         @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true })),
     );
 
+    const POLL = std.posix.POLL;
+
     while (app.running) {
         var poll_fds = [_]std.posix.pollfd{
             // wait for new SDL events.
-            .{ .fd = display_fd, .events = std.posix.POLL.IN, .revents = 0 },
+            .{ .fd = display_fd, .events = POLL.IN, .revents = 0 },
             // Wait for new input from the shell.
-            .{ .fd = shell.io.handle, .events = std.posix.POLL.IN, .revents = 0 },
+            .{ .fd = shell.io.handle, .events = POLL.IN, .revents = 0 },
         };
 
         const poll_display = &poll_fds[0];
@@ -101,18 +103,23 @@ fn runEventLoop(app: *App, shell: *pty.Shell) !void {
 
         if (app.output_buffer.count != 0) {
             // wait until we can write to the shell
-            poll_shell.events |= std.posix.POLL.OUT;
+            poll_shell.events |= POLL.OUT;
         }
 
         _ = try std.posix.poll(&poll_fds, -1);
         for (poll_fds) |fd| {
-            if (fd.revents & std.posix.POLL.NVAL != 0) {
+            if (fd.revents & POLL.NVAL != 0) {
                 std.log.err("file descriptor unexpectedly closed", .{});
                 return error.PollInvalid;
             }
         }
 
-        if (poll_display.revents & std.posix.POLL.IN != 0) {
+        if (poll_shell.revents & POLL.HUP != 0) {
+            std.log.info("shell exited", .{});
+            break;
+        }
+
+        if (poll_display.revents & POLL.IN != 0) {
             var event: c.SDL_Event = undefined;
             while (c.SDL_PollEvent(&event)) {
                 try app.handleEvent(event);
@@ -129,9 +136,9 @@ fn runEventLoop(app: *App, shell: *pty.Shell) !void {
             app.output_buffer.discard(count);
         }
 
-        if (poll_shell.revents & std.posix.POLL.IN != 0) {
             var read_buffer: [std.mem.page_size]u8 align(std.mem.page_size) = undefined;
             const count = shell.io.read(&read_buffer) catch |err| blk: {
+        if (poll_shell.revents & POLL.IN != 0) {
                 if (err == error.WouldBlock) break :blk 0;
                 return err;
             };
