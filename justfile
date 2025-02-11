@@ -1,3 +1,6 @@
+set export
+
+SHELL := "/usr/bin/bash"
 
 run:
     zig build -freference-trace run

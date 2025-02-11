@@ -97,6 +97,30 @@ fn wrapCursor(buffer: *Buffer) void {
     }
 }
 
+pub const CoordinateUpdate = union(enum) {
+    abs: u16,
+    rel: i16,
+
+    pub fn apply(update: CoordinateUpdate, coord: u31) u31 {
+        switch (update) {
+            .abs => |abs| return abs,
+            .rel => |rel| return std.math.lossyCast(u31, @as(i32, coord) + rel),
+        }
+    }
+};
+
+pub fn setCursorPosition(
+    buffer: *Buffer,
+    update: struct {
+        row: CoordinateUpdate = .{ .rel = 0 },
+        col: CoordinateUpdate = .{ .rel = 0 },
+    },
+) void {
+    buffer.cursor.col = update.col.apply(buffer.cursor.col);
+    buffer.cursor.row = update.row.apply(buffer.cursor.row);
+    buffer.wrapCursor();
+}
+
 pub fn reflowInto(source: *const Buffer, target: *Buffer) void {
     std.log.warn("TODO: reflow lines", .{});
 
@@ -125,7 +149,7 @@ pub fn reflowInto(source: *const Buffer, target: *Buffer) void {
 }
 
 pub const Cursor = struct {
-    col: u32 = 0,
+    col: u31 = 0,
     row: u31 = 0,
     brush: Cell.Style = .{},
 };

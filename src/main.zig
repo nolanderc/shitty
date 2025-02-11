@@ -3,6 +3,7 @@ const c = @import("c").includes;
 const FontManager = @import("FontManager.zig");
 const Buffer = @import("Buffer.zig");
 const pty = @import("pty.zig");
+const escapes = @import("escapes.zig");
 
 const logSDL = std.log.scoped(.SDL);
 
@@ -70,7 +71,8 @@ fn run(alloc: std.mem.Allocator) !void {
         .surface = surface,
         .font_manager = &font_manager,
         .buffer = &buffer,
-        .output_buffer = App.OutputBuffer.init(alloc),
+        .input_buffer = App.FifoBuffer.init(alloc),
+        .output_buffer = App.FifoBuffer.init(alloc),
     };
     defer app.deinit();
     try app.redraw();
@@ -136,15 +138,15 @@ fn runEventLoop(app: *App, shell: *pty.Shell) !void {
             app.output_buffer.discard(count);
         }
 
-            var read_buffer: [std.mem.page_size]u8 align(std.mem.page_size) = undefined;
-            const count = shell.io.read(&read_buffer) catch |err| blk: {
         if (poll_shell.revents & POLL.IN != 0) {
+            const buffer = try app.input_buffer.writableWithSize(std.mem.page_size);
+            const count = shell.io.read(buffer) catch |err| blk: {
                 if (err == error.WouldBlock) break :blk 0;
                 return err;
             };
             if (count > 0) {
-                const bytes = read_buffer[0..count];
-                try app.recv(bytes);
+                app.input_buffer.update(count);
+                try app.processInput();
             }
         }
 
@@ -225,12 +227,15 @@ const App = struct {
     font_manager: *FontManager,
     buffer: *Buffer,
 
+    /// Bytes read from the shell, to be processed.
+    input_buffer: FifoBuffer,
     /// Bytes that should be written to the shell at the next oppurtunity.
-    output_buffer: OutputBuffer,
+    output_buffer: FifoBuffer,
 
-    const OutputBuffer = std.fifo.LinearFifo(u8, .Dynamic);
+    const FifoBuffer = std.fifo.LinearFifo(u8, .Dynamic);
 
     pub fn deinit(app: *App) void {
+        app.input_buffer.deinit();
         app.output_buffer.deinit();
     }
 
@@ -249,15 +254,21 @@ const App = struct {
                 const ctrl = (c.SDL_KMOD_CTRL & event.key.mod) != 0;
 
                 switch (event.key.key) {
-                    c.SDLK_TAB => try app.send("😀🎉🌟🍕🚀"),
-                    c.SDLK_RETURN => try app.send("\n"),
+                    c.SDLK_TAB => try app.send("\t"),
+                    c.SDLK_RETURN => try app.send("\r"),
+                    c.SDLK_BACKSPACE => try app.send("\x7F"),
+                    c.SDLK_DELETE => try app.send("\x7f"),
+
+                    c.SDLK_A...c.SDLK_Z => |key| if (ctrl) try app.send(&.{@truncate(key - c.SDLK_A + 1)}),
 
                     c.SDLK_1 => {
                         if (ctrl) try app.adjustFontSize(1.0 / 1.1);
                     },
+
                     c.SDLK_2 => {
                         if (ctrl) try app.adjustFontSize(1.1);
                     },
+
                     c.SDLK_ESCAPE => {
                         if (shift) app.running = false;
                     },
@@ -296,24 +307,49 @@ const App = struct {
         try app.output_buffer.write(bytes);
     }
 
-    fn recv(app: *App, bytes: []const u8) !void {
-        var remaining = bytes;
-        while (remaining.len != 0) {
-            const len = std.unicode.utf8ByteSequenceLength(remaining[0]) catch {
-                app.buffer.write(std.unicode.replacement_character);
-                remaining = remaining[1..];
-                continue;
-            };
+    fn processInput(app: *App) !void {
+        var context: escapes.Context = undefined;
 
-            if (len > remaining.len) {
-                std.log.warn("TODO: buffer incomplete codepoints: {}", .{std.json.fmt(remaining, .{})});
-                break;
+        while (app.input_buffer.count != 0) {
+            const bytes = app.input_buffer.readableSlice(0);
+            const len, const command = escapes.parse(bytes, &context);
+
+            var advance = len;
+            defer app.input_buffer.discard(advance);
+
+            switch (command) {
+                .incomplete => {
+                    advance = 0;
+                    app.input_buffer.realign();
+                    if (len > app.input_buffer.count) break;
+                },
+                .invalid => {
+                    std.log.debug("invalid input: {}", .{std.json.fmt(bytes[0..len], .{})});
+                    app.buffer.write(std.unicode.replacement_character);
+                },
+                .ignore => {},
+                .codepoint => |codepoint| app.buffer.write(codepoint),
+                .retline => app.buffer.setCursorPosition(.{ .col = .{ .abs = 0 } }),
+                .newline => app.buffer.setCursorPosition(.{ .row = .{ .rel = 1 } }),
+
+                .backspace => {
+                    app.buffer.setCursorPosition(.{ .col = .{ .rel = -1 } });
+                    app.buffer.write(0);
+                    app.buffer.setCursorPosition(.{ .col = .{ .rel = -1 } });
+                },
+
+                .alert => {},
+
+                .csi => |csi| {
+                    std.log.warn("TODO: CSI {} {} ({})", .{
+                        context.fmtArgs(csi.arg_count),
+                        std.zig.fmtEscapes(&.{csi.final}),
+                        std.json.fmt(bytes[0..len], .{}),
+                    });
+                },
+
+                else => std.log.warn("unimplemented escape: {}", .{std.json.fmt(command, .{})}),
             }
-
-            defer remaining = remaining[len..];
-
-            const codepoint = std.unicode.utf8Decode(remaining[0..len]) catch std.unicode.replacement_character;
-            app.buffer.write(codepoint);
         }
 
         app.needs_redraw = true;
