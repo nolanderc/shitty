@@ -75,7 +75,7 @@ pub const Terminal = struct {
         if (child.handle > std.posix.STDERR_FILENO) child.close();
 
         const shell = getShellPath();
-        const err = std.posix.execvpeZ(shell, &.{ shell, null }, &.{null});
+        const err = std.posix.execvpeZ(shell, &.{ shell, null }, std.c.environ);
 
         std.log.err("could not exec shell: {}", .{err});
 
