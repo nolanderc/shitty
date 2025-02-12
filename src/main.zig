@@ -447,9 +447,11 @@ const App = struct {
 
             'm' => {
                 const brush = &app.buffer.cursor.brush;
-                var i: usize = 0;
-                while (i < @max(1, context.args_count)) : (i += 1) {
-                    switch (context.get(i, 0)) {
+                var i: u32 = 0;
+                while (i < @max(1, context.args_count)) {
+                    const code = context.get(i, 0);
+                    i += 1;
+                    switch (code) {
                         0 => brush.* = .{},
 
                         1 => brush.flags.bold = true,
@@ -465,6 +467,11 @@ const App = struct {
                             brush.flags.truecolor_foreground = false;
                             brush.foreground = Buffer.Cell.Style.Color.fromXterm256((arg - 30) & 7);
                         },
+                        38 => {
+                            const result = handleTrueColor(context, &i) orelse break;
+                            brush.flags.truecolor_foreground = result.truecolor;
+                            brush.foreground = result.color;
+                        },
                         39 => {
                             brush.flags.truecolor_foreground = false;
                             brush.foreground = Buffer.Cell.Style.Color.fromXterm256(15);
@@ -473,6 +480,11 @@ const App = struct {
                         inline 40...47 => |arg| {
                             brush.flags.truecolor_background = false;
                             brush.background = Buffer.Cell.Style.Color.fromXterm256((arg - 40) & 7);
+                        },
+                        48 => {
+                            const result = handleTrueColor(context, &i) orelse break;
+                            brush.flags.truecolor_background = result.truecolor;
+                            brush.background = result.color;
                         },
                         49 => {
                             brush.flags.truecolor_foreground = false;
@@ -497,6 +509,34 @@ const App = struct {
             },
 
             else => return error.Unimplemented,
+        }
+    }
+
+    fn handleTrueColor(context: *const escapes.Context, index: *u32) ?struct {
+        truecolor: bool,
+        color: Buffer.Cell.Style.Color,
+    } {
+        const mode = context.get(index.*, 0);
+        index.* += 1;
+        switch (mode) {
+            2 => {
+                const r: u8 = @truncate(context.get(index.*, 0));
+                index.* += 1;
+                const g: u8 = @truncate(context.get(index.*, 0));
+                index.* += 1;
+                const b: u8 = @truncate(context.get(index.*, 0));
+                index.* += 1;
+                return .{ .truecolor = true, .color = .{ .rgb = .{ .r = r, .g = g, .b = b } } };
+            },
+            5 => {
+                const color_index = context.get(index.*, 0);
+                index.* += 1;
+                return .{ .truecolor = false, .color = Buffer.Cell.Style.Color.fromXterm256(@truncate(color_index)) };
+            },
+            else => {
+                std.log.warn("unrecognized color mode: {}", .{mode});
+                return null;
+            },
         }
     }
 
