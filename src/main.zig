@@ -313,8 +313,9 @@ const App = struct {
         var context: escapes.Context = undefined;
 
         while (app.input_buffer.count != 0) {
-            const bytes = app.input_buffer.readableSlice(0);
+            const bytes = @constCast(app.input_buffer.readableSlice(0));
             const len, const command = escapes.parse(bytes, &context);
+            const fmtSequence = std.json.fmt(bytes[0..len], .{});
 
             var advance = len;
             defer app.input_buffer.discard(advance);
@@ -322,11 +323,13 @@ const App = struct {
             switch (command) {
                 .incomplete => {
                     advance = 0;
-                    app.input_buffer.realign();
+                    const aligned = app.input_buffer.head == 0;
+                    if (!aligned) app.input_buffer.realign();
                     if (len > app.input_buffer.count) break;
+                    std.debug.assert(!aligned);
                 },
                 .invalid => {
-                    std.log.debug("invalid input: {}", .{std.json.fmt(bytes[0..len], .{})});
+                    std.log.debug("invalid input: {}", .{fmtSequence});
                     app.buffer.write(std.unicode.replacement_character);
                 },
                 .ignore => {},
@@ -347,14 +350,37 @@ const App = struct {
                         std.log.warn("unimplemented CSI {} {c} ({})", .{
                             context.fmtArgs(),
                             csi.final,
-                            std.json.fmt(bytes[0..len], .{}),
+                            fmtSequence,
                         });
+                    }
+                },
+
+                .osc => |osc| {
+                    const code = if (osc.arg_min != 0) context.get(0, 0) else {
+                        std.log.warn("OSC missing code ({})", .{fmtSequence});
+                        continue;
+                    };
+
+                    const min = context.get(osc.arg_min, 0);
+                    const max = context.get(osc.arg_max, 0);
+
+                    std.debug.assert(bytes[max] == std.ascii.control_code.stx or bytes[max] == std.ascii.control_code.bel);
+                    bytes[max] = 0; // ensure null-termination (we don't need the final STX/BEL byte)
+
+                    std.debug.assert(min <= max and max < len);
+                    const text = bytes[min..max :0];
+
+                    switch (code) {
+                        0, 2 => _ = c.SDL_SetWindowTitle(app.window, text),
+                        else => {
+                            std.log.warn("unknown OSC code: {} ({})", .{ code, fmtSequence });
+                        },
                     }
                 },
 
                 else => std.log.warn("unimplemented escape: {} ({})", .{
                     std.json.fmt(command, .{}),
-                    std.json.fmt(bytes[0..len], .{}),
+                    fmtSequence,
                 }),
             }
         }

@@ -30,8 +30,21 @@ pub const Context = struct {
     const capacity = 16;
 
     args: [capacity]u32,
-    args_count: u32,
+    args_count: u8,
     args_set: std.bit_set.IntegerBitSet(capacity),
+
+    fn push(context: *Context, value: ?u32) void {
+        if (context.args_count >= context.args.len) {
+            std.log.warn("too many parameters in escape sequence", .{});
+            return;
+        }
+
+        if (value) |x| {
+            context.args[context.args_count] = x;
+            context.args_set.set(context.args_count);
+        }
+        context.args_count += 1;
+    }
 
     pub fn get(context: *const Context, index: usize, default: u32) u32 {
         if (index < context.args_count and context.args_set.isSet(index)) {
@@ -65,9 +78,9 @@ pub fn parse(bytes: []const u8, context: *Context) ParseResult {
     switch (bytes[0]) {
         0 => return .{ 1, .ignore },
 
-        '\x07' => return .{ 1, .alert },
-        '\x08' => return .{ 1, .backspace },
-        '\x7f' => return .{ 1, .delete },
+        std.ascii.control_code.bel => return .{ 1, .alert },
+        std.ascii.control_code.bs => return .{ 1, .backspace },
+        std.ascii.control_code.del => return .{ 1, .delete },
 
         '\r' => return .{ 1, .retline },
         '\n' => return .{ 1, .newline },
@@ -123,7 +136,7 @@ pub fn parseCSI(bytes: []const u8, context: *Context) ParseResult {
 
     const len, const complete = parseParameterList(bytes[i..], context);
     i += len;
-    if (!complete) return .{ i, .incomplete };
+    if (!complete) return .{ i + 1, .incomplete };
 
     if (i >= bytes.len) return .{ i + 1, .incomplete };
     csi.final = bytes[i];
@@ -132,7 +145,12 @@ pub fn parseCSI(bytes: []const u8, context: *Context) ParseResult {
     return .{ i, .{ .csi = csi } };
 }
 
-pub const OperatingSystemControl = void;
+pub const OperatingSystemControl = struct {
+    /// This argument at this index gives the start offset into the sequence.
+    arg_min: u8,
+    /// This argument at this index gives the end offset into the sequence.
+    arg_max: u8,
+};
 
 pub fn parseOSC(bytes: []const u8, context: *Context) ParseResult {
     std.debug.assert(bytes[0] == ESC and bytes[1] == ']');
@@ -143,10 +161,25 @@ pub fn parseOSC(bytes: []const u8, context: *Context) ParseResult {
     var i: u32 = 2;
     const len, const complete = parseParameterList(bytes[i..], context);
     i += len;
+    if (!complete) return .{ i + 1, .incomplete };
 
-    if (!complete) return .{ i, .incomplete };
+    const arg_min = context.args_count;
+    context.push(i);
 
-    return .{ i, .osc };
+    while (i < bytes.len) : (i += 1) {
+        switch (bytes[i]) {
+            std.ascii.control_code.stx, std.ascii.control_code.bel => break,
+            else => continue,
+        }
+    } else {
+        return .{ i + 1, .incomplete };
+    }
+
+    const arg_max = context.args_count;
+    context.push(i);
+    i += 1;
+
+    return .{ i, .{ .osc = .{ .arg_min = arg_min, .arg_max = arg_max } } };
 }
 
 fn parseParameterList(bytes: []const u8, context: *Context) struct { u32, bool } {
@@ -163,11 +196,7 @@ fn parseParameterList(bytes: []const u8, context: *Context) struct { u32, bool }
             },
 
             ';' => {
-                if (has_digits and context.args_count < context.args.len) {
-                    context.args[context.args_count] = argument;
-                    context.args_set.set(context.args_count);
-                }
-                context.args_count +|= 1;
+                context.push(if (has_digits) argument else null);
                 has_digits = false;
                 argument = 0;
             },
@@ -175,14 +204,10 @@ fn parseParameterList(bytes: []const u8, context: *Context) struct { u32, bool }
             else => break,
         }
     } else {
-        return .{ i + 1, false };
+        return .{ i, false };
     }
 
-    if (has_digits and context.args_count < context.args.len) {
-        context.args[context.args_count] = argument;
-        context.args_set.set(context.args_count);
-        context.args_count +|= 1;
-    }
+    if (has_digits) context.push(argument);
 
     return .{ i, true };
 }
