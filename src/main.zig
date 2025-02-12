@@ -461,9 +461,49 @@ const App = struct {
 
         if (!c.SDL_ClearSurface(app.surface, 0.0, 0.0, 0.0, 1.0)) return error.SdlClearSurface;
 
-        try app.font_manager.draw(app.surface, app.buffer);
+        try app.drawBuffer();
 
         if (!c.SDL_UpdateWindowSurface(app.window)) return error.SdlUpdateWindowSurface;
+    }
+
+    fn drawBuffer(app: *App) !void {
+        const buffer = app.buffer;
+        const manager = app.font_manager;
+        const surface = app.surface;
+
+        const grid_width = std.math.lossyCast(f32, buffer.size.cols) * manager.metrics.cell_width;
+        const grid_height = std.math.lossyCast(f32, buffer.size.rows) * manager.metrics.cell_height;
+
+        const padding_x = 0.5 * (std.math.lossyCast(f32, surface.w) - grid_width);
+        const padding_y = 0.5 * (std.math.lossyCast(f32, surface.h) - grid_height);
+
+        var row: i32 = 0;
+        var baseline: f32 = manager.metrics.baseline + padding_y;
+        while (row < buffer.size.rows) : (row += 1) {
+            const cells = buffer.getRow(row);
+
+            var advance: f32 = padding_x;
+            for (cells) |cell| {
+                const style: FontManager.Style = if (cell.style.flags.bold)
+                    (if (cell.style.flags.italics) .bold_italic else .bold)
+                else
+                    (if (cell.style.flags.italics) .italic else .regular);
+
+                const glyph = manager.mapCodepoint(cell.codepoint, style) orelse continue;
+                const raster = try manager.getGlyphRaster(glyph);
+
+                _ = c.SDL_BlitSurface(raster.surface, null, surface, &c.SDL_Rect{
+                    .x = @intFromFloat(@floor(advance + raster.left)),
+                    .y = @intFromFloat(@floor(baseline - raster.top)),
+                    .w = raster.surface.w,
+                    .h = raster.surface.h,
+                });
+
+                advance += manager.metrics.cell_width;
+            }
+
+            baseline += manager.metrics.cell_height;
+        }
     }
 };
 

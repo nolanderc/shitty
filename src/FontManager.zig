@@ -139,43 +139,7 @@ fn computeMetrics(manager: *FontManager) Metrics {
     };
 }
 
-pub fn draw(manager: *FontManager, surface: *c.SDL_Surface, buffer: *const Buffer) !void {
-    const grid_width = std.math.lossyCast(f32, buffer.size.cols) * manager.metrics.cell_width;
-    const grid_height = std.math.lossyCast(f32, buffer.size.rows) * manager.metrics.cell_height;
-
-    const padding_x = 0.5 * (std.math.lossyCast(f32, surface.w) - grid_width);
-    const padding_y = 0.5 * (std.math.lossyCast(f32, surface.h) - grid_height);
-
-    var row: i32 = 0;
-    var baseline: f32 = manager.metrics.baseline + padding_y;
-    while (row < buffer.size.rows) : (row += 1) {
-        const cells = buffer.getRow(row);
-
-        var advance: f32 = padding_x;
-        for (cells) |cell| {
-            const style: Style = if (cell.style.flags.bold)
-                (if (cell.style.flags.italics) .bold_italic else .bold)
-            else
-                (if (cell.style.flags.italics) .italic else .regular);
-
-            const glyph = manager.mapCodepoint(cell.codepoint, style) orelse continue;
-            const raster = try manager.getGlyphRaster(glyph);
-
-            _ = c.SDL_BlitSurface(raster.surface, null, surface, &c.SDL_Rect{
-                .x = @intFromFloat(@floor(advance + raster.left)),
-                .y = @intFromFloat(@floor(baseline - raster.top)),
-                .w = raster.surface.w,
-                .h = raster.surface.h,
-            });
-
-            advance += manager.metrics.cell_width;
-        }
-
-        baseline += manager.metrics.cell_height;
-    }
-}
-
-fn getGlyphRaster(manager: *FontManager, glyph: GlyphKey) !GlyphRaster {
+pub fn getGlyphRaster(manager: *FontManager, glyph: GlyphKey) !GlyphRaster {
     const entry = try manager.glyph_cache.getOrPut(manager.alloc, glyph);
     errdefer manager.glyph_cache.removeByPtr(entry.key_ptr);
     if (!entry.found_existing) entry.value_ptr.* = try manager.rasterizeGlyph(glyph);
@@ -266,7 +230,7 @@ fn dumpSurfaceStderr(surface: *c.SDL_Surface) void {
     }
 }
 
-fn mapCodepoint(manager: *FontManager, codepoint: u21, style: Style) ?GlyphKey {
+pub fn mapCodepoint(manager: *FontManager, codepoint: u21, style: Style) ?GlyphKey {
     const chain = manager.styles.get(style);
     var query = codepoint;
     while (true) {
