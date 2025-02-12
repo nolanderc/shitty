@@ -16,6 +16,7 @@ pub const Command = union(enum) {
 
     csi: ControlSequenceInducer,
     osc: OperatingSystemControl,
+    set_character_set,
 };
 
 const ParseResult = struct {
@@ -27,11 +28,16 @@ const ParseResult = struct {
 };
 
 pub const Context = struct {
-    const capacity = 16;
+    const capacity = 32;
 
     args: [capacity]u32,
     args_count: u8,
     args_set: std.bit_set.IntegerBitSet(capacity),
+
+    fn clear(context: *Context) void {
+        context.args_count = 0;
+        context.args_set = .{ .mask = 0 };
+    }
 
     fn push(context: *Context, value: ?u32) void {
         if (context.args_count >= context.args.len) {
@@ -72,7 +78,7 @@ pub const Context = struct {
     };
 };
 
-const ESC = 0x1b;
+const ESC = std.ascii.control_code.esc;
 
 pub fn parse(bytes: []const u8, context: *Context) ParseResult {
     switch (bytes[0]) {
@@ -90,6 +96,25 @@ pub fn parse(bytes: []const u8, context: *Context) ParseResult {
             switch (bytes[1]) {
                 '[' => return parseCSI(bytes, context),
                 ']' => return parseOSC(bytes, context),
+                0x20...0x2f => {
+                    context.clear();
+                    context.push(bytes[1]);
+                    var i: u32 = 2;
+                    while (i < bytes.len) {
+                        defer i += 1;
+                        switch (bytes[i]) {
+                            0x20...0x2f => |arg| context.push(arg),
+                            0x30...0x7e => |arg| {
+                                context.push(arg);
+                                break;
+                            },
+                            else => return .{ i, .invalid },
+                        }
+                    } else {
+                        return .{ i + 1, .incomplete };
+                    }
+                    return .{ i, .set_character_set };
+                },
                 else => return .{ 2, .invalid },
             }
         },

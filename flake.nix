@@ -16,11 +16,11 @@
 
   outputs =
     {
-      self,
       nixpkgs,
       flake-utils,
       zig-overlay,
       zls,
+      ...
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
