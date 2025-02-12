@@ -162,12 +162,15 @@ pub const Cell = struct {
 
     pub const Style = struct {
         flags: Flags = .{},
-        foreground: Color = Color.fromIndex(0),
-        background: Color = Color.fromIndex(15),
+        foreground: Color = Color.fromIndex(15),
+        background: Color = Color.fromIndex(0),
 
-        pub const Flags = packed struct(u2) {
+        pub const Flags = packed struct(u5) {
             truecolor_foreground: bool = false,
             truecolor_background: bool = false,
+            bold: bool = false,
+            italics: bool = false,
+            underline: bool = false,
         };
 
         pub const Color = extern struct {

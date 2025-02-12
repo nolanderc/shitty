@@ -15,6 +15,7 @@ pub const Command = union(enum) {
     alert,
 
     csi: ControlSequenceInducer,
+    osc: OperatingSystemControl,
 };
 
 const ParseResult = struct {
@@ -26,20 +27,33 @@ const ParseResult = struct {
 };
 
 pub const Context = struct {
-    args: [16]u32,
+    const capacity = 16;
 
-    pub fn fmtArgs(context: *const Context, count: u32) FormatterArgs {
-        return .{ .context = context, .count = count };
+    args: [capacity]u32,
+    args_count: u32,
+    args_set: std.bit_set.IntegerBitSet(capacity),
+
+    pub fn get(context: *const Context, index: usize, default: u32) u32 {
+        if (index < context.args_count and context.args_set.isSet(index)) {
+            return context.args[index];
+        } else {
+            return default;
+        }
+    }
+
+    pub fn fmtArgs(context: *const Context) FormatterArgs {
+        return .{ .context = context };
     }
 
     const FormatterArgs = struct {
         context: *const Context,
-        count: u32,
 
         pub fn format(fmt: FormatterArgs, _: anytype, _: anytype, writer: anytype) !void {
-            for (0.., fmt.context.args[0..fmt.count]) |index, arg| {
+            for (0.., fmt.context.args[0..fmt.context.args_count]) |index, arg| {
                 if (index != 0) try writer.writeAll(";");
-                try writer.print("{d}", .{arg});
+                if (fmt.context.args_set.isSet(index)) {
+                    try writer.print("{d}", .{arg});
+                }
             }
         }
     };
@@ -62,6 +76,7 @@ pub fn parse(bytes: []const u8, context: *Context) ParseResult {
             if (bytes.len < 2) return .{ 2, .incomplete };
             switch (bytes[1]) {
                 '[' => return parseCSI(bytes, context),
+                ']' => return parseOSC(bytes, context),
                 else => return .{ 2, .invalid },
             }
         },
@@ -87,9 +102,7 @@ pub fn parse(bytes: []const u8, context: *Context) ParseResult {
     }
 }
 
-const ControlSequenceInducer = struct {
-    /// Number of arguments.
-    arg_count: u8,
+pub const ControlSequenceInducer = struct {
     intermediate: u8,
     final: u8,
 };
@@ -97,43 +110,79 @@ const ControlSequenceInducer = struct {
 pub fn parseCSI(bytes: []const u8, context: *Context) ParseResult {
     std.debug.assert(bytes[0] == ESC and bytes[1] == '[');
 
-    @memset(&context.args, 0);
+    context.args_count = 0;
+    context.args_set = .{ .mask = 0 };
 
-    var i: u32 = 2;
-    var digits: u32 = 0;
     var csi = std.mem.zeroes(ControlSequenceInducer);
 
-    while (i < bytes.len) {
-        defer i += 1;
-        switch (bytes[i]) {
-            '0'...'9' => |digit| {
-                digits += 1;
-                if (csi.arg_count < context.args.len) {
-                    context.args[csi.arg_count] *|= 10;
-                    context.args[csi.arg_count] +|= digit - '0';
-                }
-            },
-
-            ';', ':' => {
-                csi.arg_count +|= 1;
-                digits = 0;
-            },
-
-            else => |char| switch (char) {
-                '#', '?' => csi.intermediate = char,
-                else => {
-                    csi.final = char;
-                    break;
-                },
-            },
-        }
+    var i: u32 = 2;
+    if (i < bytes.len and bytes[i] == '?') {
+        csi.intermediate = bytes[i];
+        i += 1;
     }
 
-    if (digits != 0) csi.arg_count += 1;
+    const len, const complete = parseParameterList(bytes[i..], context);
+    i += len;
+    if (!complete) return .{ i, .incomplete };
 
-    if (csi.arg_count >= context.args.len) {
-        std.log.warn("CSI contains too many arguments: {}", .{std.json.fmt(bytes[0..i], .{})});
-    }
+    if (i >= bytes.len) return .{ i + 1, .incomplete };
+    csi.final = bytes[i];
+    i += 1;
 
     return .{ i, .{ .csi = csi } };
+}
+
+pub const OperatingSystemControl = void;
+
+pub fn parseOSC(bytes: []const u8, context: *Context) ParseResult {
+    std.debug.assert(bytes[0] == ESC and bytes[1] == ']');
+
+    context.args_count = 0;
+    context.args_set = .{ .mask = 0 };
+
+    var i: u32 = 2;
+    const len, const complete = parseParameterList(bytes[i..], context);
+    i += len;
+
+    if (!complete) return .{ i, .incomplete };
+
+    return .{ i, .osc };
+}
+
+fn parseParameterList(bytes: []const u8, context: *Context) struct { u32, bool } {
+    var i: u32 = 0;
+    var argument: u32 = 0;
+    var has_digits = false;
+
+    while (i < bytes.len) : (i += 1) {
+        switch (bytes[i]) {
+            '0'...'9' => |digit| {
+                has_digits = true;
+                argument *|= 10;
+                argument +|= digit - '0';
+            },
+
+            ';' => {
+                if (has_digits and context.args_count < context.args.len) {
+                    context.args[context.args_count] = argument;
+                    context.args_set.set(context.args_count);
+                }
+                context.args_count +|= 1;
+                has_digits = false;
+                argument = 0;
+            },
+
+            else => break,
+        }
+    } else {
+        return .{ i + 1, false };
+    }
+
+    if (has_digits and context.args_count < context.args.len) {
+        context.args[context.args_count] = argument;
+        context.args_set.set(context.args_count);
+        context.args_count +|= 1;
+    }
+
+    return .{ i, true };
 }

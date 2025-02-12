@@ -153,7 +153,12 @@ pub fn draw(manager: *FontManager, surface: *c.SDL_Surface, buffer: *const Buffe
 
         var advance: f32 = padding_x;
         for (cells) |cell| {
-            const glyph = manager.mapCodepoint(cell.codepoint, .regular) orelse continue;
+            const style: Style = if (cell.style.flags.bold)
+                (if (cell.style.flags.italics) .bold_italic else .bold)
+            else
+                (if (cell.style.flags.italics) .italic else .regular);
+
+            const glyph = manager.mapCodepoint(cell.codepoint, style) orelse continue;
             const raster = try manager.getGlyphRaster(glyph);
 
             _ = c.SDL_BlitSurface(raster.surface, null, surface, &c.SDL_Rect{

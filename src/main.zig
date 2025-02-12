@@ -232,6 +232,8 @@ const App = struct {
     /// Bytes that should be written to the shell at the next oppurtunity.
     output_buffer: FifoBuffer,
 
+    private_modes: std.EnumSet(PrivateModes) = .{},
+
     const FifoBuffer = std.fifo.LinearFifo(u8, .Dynamic);
 
     pub fn deinit(app: *App) void {
@@ -340,19 +342,92 @@ const App = struct {
 
                 .alert => {},
 
-                .csi => |csi| {
-                    std.log.warn("TODO: CSI {} {} ({})", .{
-                        context.fmtArgs(csi.arg_count),
-                        std.zig.fmtEscapes(&.{csi.final}),
-                        std.json.fmt(bytes[0..len], .{}),
-                    });
+                .csi => |csi| app.handleCSI(csi, &context) catch |err| {
+                    if (err == error.Unimplemented) {
+                        std.log.warn("unimplemented CSI {} {c} ({})", .{
+                            context.fmtArgs(),
+                            csi.final,
+                            std.json.fmt(bytes[0..len], .{}),
+                        });
+                    }
                 },
 
-                else => std.log.warn("unimplemented escape: {}", .{std.json.fmt(command, .{})}),
+                else => std.log.warn("unimplemented escape: {} ({})", .{
+                    std.json.fmt(command, .{}),
+                    std.json.fmt(bytes[0..len], .{}),
+                }),
             }
         }
 
         app.needs_redraw = true;
+    }
+
+    fn handleCSI(app: *App, csi: escapes.ControlSequenceInducer, context: *const escapes.Context) !void {
+        switch (csi.final) {
+            'h' => {
+                const value = context.get(0, 0);
+                const mode = std.meta.intToEnum(PrivateModes, value) catch return error.Unimplemented;
+                app.private_modes.insert(mode);
+            },
+            'l' => {
+                const value = context.get(0, 0);
+                const mode = std.meta.intToEnum(PrivateModes, value) catch return error.Unimplemented;
+                app.private_modes.remove(mode);
+            },
+
+            'm' => {
+                const brush = &app.buffer.cursor.brush;
+                var i: usize = 0;
+                while (i < @max(1, context.args_count)) : (i += 1) {
+                    switch (context.get(i, 0)) {
+                        0 => brush.* = .{},
+
+                        1 => brush.flags.bold = true,
+                        22 => brush.flags.bold = false,
+
+                        3 => brush.flags.italics = true,
+                        23 => brush.flags.italics = false,
+
+                        4 => brush.flags.underline = true,
+                        24 => brush.flags.underline = false,
+
+                        inline 30...37 => |arg| {
+                            brush.flags.truecolor_foreground = false;
+                            brush.foreground = Buffer.Cell.Style.Color.fromIndex((arg - 30) & 7);
+                        },
+                        39 => {
+                            brush.flags.truecolor_foreground = false;
+                            brush.foreground = Buffer.Cell.Style.Color.fromIndex(15);
+                        },
+
+                        inline 40...47 => |arg| {
+                            brush.flags.truecolor_background = false;
+                            brush.background = Buffer.Cell.Style.Color.fromIndex((arg - 40) & 7);
+                        },
+                        49 => {
+                            brush.flags.truecolor_foreground = false;
+                            brush.foreground = Buffer.Cell.Style.Color.fromIndex(0);
+                        },
+
+                        inline 90...97 => |arg| {
+                            brush.flags.truecolor_foreground = false;
+                            brush.foreground = Buffer.Cell.Style.Color.fromIndex(8 + (arg - 90) & 7);
+                        },
+                        inline 100...107 => |arg| {
+                            brush.flags.truecolor_background = false;
+                            brush.background = Buffer.Cell.Style.Color.fromIndex(8 + (arg - 100) & 7);
+                        },
+
+                        else => |first| {
+                            std.log.warn("unimplemented style: {}", .{first});
+                            break;
+                        },
+                    }
+                }
+            },
+
+            else => return error.Unimplemented,
+        }
     }
 
     pub fn redraw(app: *App) !void {
@@ -364,4 +439,8 @@ const App = struct {
 
         if (!c.SDL_UpdateWindowSurface(app.window)) return error.SdlUpdateWindowSurface;
     }
+};
+
+pub const PrivateModes = enum(u16) {
+    bracketed_paste = 2004,
 };
