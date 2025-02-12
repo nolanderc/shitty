@@ -92,6 +92,18 @@ fn runEventLoop(app: *App, shell: *pty.Shell) !void {
 
     const POLL = std.posix.POLL;
 
+    const max_redraw_delay = 10 * std.time.ns_per_ms;
+
+    var largest_seen_input_size: usize = std.mem.page_size;
+    var last_redraw = try std.time.Instant.now();
+    var poll_timeout: ?u64 = null;
+
+    // We keep track of the number of times a call to `poll` has completed
+    // almost immediately, indicating that there is a lot of IO going on. If
+    // this number gets above some thresheld, we start throttling the drawing,
+    // sacrificing some latency for higher IO throughput.
+    var high_frequency_poll_count: u32 = 0;
+
     while (app.running) {
         var poll_fds = [_]std.posix.pollfd{
             // wait for new SDL events.
@@ -108,7 +120,22 @@ fn runEventLoop(app: *App, shell: *pty.Shell) !void {
             poll_shell.events |= POLL.OUT;
         }
 
-        _ = try std.posix.poll(&poll_fds, -1);
+        const timeout_ms: i32 = if (poll_timeout) |timeout|
+            std.math.lossyCast(i32, timeout / std.time.ns_per_ms)
+        else
+            -1;
+        poll_timeout = null;
+
+        var poll_timer = try std.time.Timer.start();
+        _ = try std.posix.poll(&poll_fds, timeout_ms);
+        const poll_duration = poll_timer.read();
+
+        if (poll_duration < 1 * std.time.ns_per_ms) {
+            high_frequency_poll_count +|= 1;
+        } else {
+            high_frequency_poll_count = 0;
+        }
+
         for (poll_fds) |fd| {
             if (fd.revents & POLL.NVAL != 0) {
                 std.log.err("file descriptor unexpectedly closed", .{});
@@ -139,24 +166,38 @@ fn runEventLoop(app: *App, shell: *pty.Shell) !void {
         }
 
         if (poll_shell.revents & POLL.IN != 0) {
-            const buffer = try app.input_buffer.writableWithSize(std.mem.page_size);
+            const buffer = try app.input_buffer.writableWithSize(@min(2 * largest_seen_input_size, 4 << 20));
             const count = shell.io.read(buffer) catch |err| blk: {
                 if (err == error.WouldBlock) break :blk 0;
                 return err;
             };
             if (count > 0) {
                 app.input_buffer.update(count);
+                largest_seen_input_size = @max(largest_seen_input_size, app.input_buffer.count);
                 try app.processInput();
             }
         }
 
         if (app.needs_redraw) {
+            if (high_frequency_poll_count > 10) {
+                // there is a lot of IO currently, so unless we are hitting our
+                // deadline for delivering the next frame, we delay redrawing
+                // so that we can prioritize IO throughput.
+                const now = try std.time.Instant.now();
+                const time_since_redraw = now.since(last_redraw);
+                if (time_since_redraw < max_redraw_delay) {
+                    poll_timeout = max_redraw_delay - time_since_redraw;
+                    continue;
+                }
+            }
+
             app.redraw() catch |err| {
                 logSDL.err("could not redraw screen: {}", .{err});
                 if (@errorReturnTrace()) |error_trace| {
                     std.debug.dumpStackTrace(error_trace.*);
                 }
             };
+            last_redraw = try std.time.Instant.now();
         }
     }
 }
