@@ -38,9 +38,13 @@ pub const GlyphKey = struct {
 
 pub const GlyphRaster = struct {
     surface: *c.SDL_Surface,
-    left: f32,
-    top: f32,
+    left: i32,
+    top: i32,
     advance: f32,
+
+    /// Some glyphs may already have their own color (eg., emojis) in which
+    /// case we shouldn't modulate their color.
+    is_color: bool,
 
     pub fn deinit(raster: GlyphRaster) void {
         c.SDL_DestroySurface(raster.surface);
@@ -48,9 +52,10 @@ pub const GlyphRaster = struct {
 };
 
 pub const Metrics = struct {
-    cell_height: f32,
-    cell_width: f32,
-    baseline: f32,
+    cell_height: u32,
+    cell_width: u32,
+    baseline: i32,
+    descender: i32,
 };
 
 pub fn deinit(manager: *FontManager) void {
@@ -133,9 +138,10 @@ fn computeMetrics(manager: *FontManager) Metrics {
     const cell_height = @ceil(line_height);
 
     return .{
-        .cell_width = cell_width,
-        .cell_height = cell_height,
-        .baseline = cell_height + descender,
+        .cell_width = @intFromFloat(cell_width),
+        .cell_height = @intFromFloat(cell_height),
+        .baseline = @intFromFloat(@round(cell_height + descender)),
+        .descender = @intFromFloat(@round(descender)),
     };
 }
 
@@ -194,7 +200,7 @@ fn rasterizeGlyph(manager: *FontManager, glyph: GlyphKey) !GlyphRaster {
     var scale: f32 = 1.0;
 
     if (is_bitmap) {
-        const target_height: i32 = @intFromFloat(@floor(manager.metrics.cell_height));
+        const target_height = std.math.lossyCast(i32, manager.metrics.cell_height);
 
         while (surface.h > target_height) {
             const next_height = @max(target_height, @divTrunc(surface.h, 2));
@@ -209,9 +215,10 @@ fn rasterizeGlyph(manager: *FontManager, glyph: GlyphKey) !GlyphRaster {
 
     return .{
         .surface = surface,
-        .left = scale * @as(f32, @floatFromInt(slot.bitmap_left)),
-        .top = scale * @as(f32, @floatFromInt(slot.bitmap_top)),
+        .left = @intFromFloat(@floor(scale * @as(f32, @floatFromInt(slot.bitmap_left)))),
+        .top = @intFromFloat(@floor(scale * @as(f32, @floatFromInt(slot.bitmap_top)))),
         .advance = scale * @as(f32, @floatFromInt(slot.advance.x)) / (1 << 6),
+        .is_color = pixel_mode == .bgra,
     };
 }
 

@@ -209,8 +209,8 @@ fn getWindowSize(window: *c.SDL_Window) ![2]u32 {
 fn computeBufferSize(window_size: [2]u32, font: *const FontManager, scrollback: u32) !Buffer.Size {
     const metrics = font.metrics;
     return .{
-        .rows = @max(1, @as(u32, @intFromFloat(@floor(std.math.lossyCast(f32, window_size[1]) / metrics.cell_height)))),
-        .cols = @max(1, @as(u32, @intFromFloat(@floor(std.math.lossyCast(f32, window_size[0]) / metrics.cell_width)))),
+        .rows = @max(1, window_size[1] / metrics.cell_height),
+        .cols = @max(1, window_size[0] / metrics.cell_width),
         .scrollback_rows = scrollback,
     };
 }
@@ -291,7 +291,10 @@ const App = struct {
     }
 
     fn adjustFontSize(app: *App, multiplier: f32) !void {
-        try app.font_manager.setSize(app.font_manager.ptsize * multiplier);
+        const new_size = app.font_manager.ptsize * multiplier;
+        if (new_size < 8) return;
+
+        try app.font_manager.setSize(new_size);
         try app.updateBufferSize();
         app.needs_redraw = true;
     }
@@ -315,7 +318,7 @@ const App = struct {
         while (app.input_buffer.count != 0) {
             const bytes = @constCast(app.input_buffer.readableSlice(0));
             const len, const command = escapes.parse(bytes, &context);
-            const fmtSequence = std.json.fmt(bytes[0..len], .{});
+            const fmtSequence = std.json.fmt(bytes[0..@min(len, bytes.len)], .{});
 
             var advance = len;
             defer app.input_buffer.discard(advance);
@@ -419,29 +422,29 @@ const App = struct {
 
                         inline 30...37 => |arg| {
                             brush.flags.truecolor_foreground = false;
-                            brush.foreground = Buffer.Cell.Style.Color.fromIndex((arg - 30) & 7);
+                            brush.foreground = Buffer.Cell.Style.Color.fromXterm256((arg - 30) & 7);
                         },
                         39 => {
                             brush.flags.truecolor_foreground = false;
-                            brush.foreground = Buffer.Cell.Style.Color.fromIndex(15);
+                            brush.foreground = Buffer.Cell.Style.Color.fromXterm256(15);
                         },
 
                         inline 40...47 => |arg| {
                             brush.flags.truecolor_background = false;
-                            brush.background = Buffer.Cell.Style.Color.fromIndex((arg - 40) & 7);
+                            brush.background = Buffer.Cell.Style.Color.fromXterm256((arg - 40) & 7);
                         },
                         49 => {
                             brush.flags.truecolor_foreground = false;
-                            brush.foreground = Buffer.Cell.Style.Color.fromIndex(0);
+                            brush.foreground = Buffer.Cell.Style.Color.fromXterm256(0);
                         },
 
                         inline 90...97 => |arg| {
                             brush.flags.truecolor_foreground = false;
-                            brush.foreground = Buffer.Cell.Style.Color.fromIndex(8 + (arg - 90) & 7);
+                            brush.foreground = Buffer.Cell.Style.Color.fromXterm256(8 + (arg - 90) & 7);
                         },
                         inline 100...107 => |arg| {
                             brush.flags.truecolor_background = false;
-                            brush.background = Buffer.Cell.Style.Color.fromIndex(8 + (arg - 100) & 7);
+                            brush.background = Buffer.Cell.Style.Color.fromXterm256(8 + (arg - 100) & 7);
                         },
 
                         else => |first| {
@@ -471,38 +474,63 @@ const App = struct {
         const manager = app.font_manager;
         const surface = app.surface;
 
-        const grid_width = std.math.lossyCast(f32, buffer.size.cols) * manager.metrics.cell_width;
-        const grid_height = std.math.lossyCast(f32, buffer.size.rows) * manager.metrics.cell_height;
+        const metrics = manager.metrics;
 
-        const padding_x = 0.5 * (std.math.lossyCast(f32, surface.w) - grid_width);
-        const padding_y = 0.5 * (std.math.lossyCast(f32, surface.h) - grid_height);
+        const grid_width: u32 = buffer.size.cols * metrics.cell_width;
+        const grid_height: u32 = buffer.size.rows * metrics.cell_height;
+
+        const padding_x: c_int = @divTrunc(surface.w - std.math.lossyCast(c_int, grid_width), 2);
+        const padding_y: c_int = @divTrunc(surface.h - std.math.lossyCast(c_int, grid_height), 2);
 
         var row: i32 = 0;
-        var baseline: f32 = manager.metrics.baseline + padding_y;
+        var baseline = manager.metrics.baseline + padding_y;
         while (row < buffer.size.rows) : (row += 1) {
             const cells = buffer.getRow(row);
 
-            var advance: f32 = padding_x;
-            for (cells) |cell| {
-                const style: FontManager.Style = if (cell.style.flags.bold)
-                    (if (cell.style.flags.italics) .bold_italic else .bold)
-                else
-                    (if (cell.style.flags.italics) .italic else .regular);
+            var advance = padding_x;
+            for (cells, 0..) |cell, col| {
+                const style = cell.style;
+                const flags = style.flags;
 
-                const glyph = manager.mapCodepoint(cell.codepoint, style) orelse continue;
+                const font_style: FontManager.Style = if (flags.bold)
+                    (if (flags.italics) .bold_italic else .bold)
+                else
+                    (if (flags.italics) .italic else .regular);
+
+                const glyph = manager.mapCodepoint(cell.codepoint, font_style) orelse continue;
                 const raster = try manager.getGlyphRaster(glyph);
 
+                const Color = Buffer.Cell.Style.Color;
+                var back = if (flags.truecolor_background) style.background.rgb else style.background.palette.getRGB(Color.RGB.gray(0));
+                var fore = if (flags.truecolor_foreground) style.foreground.rgb else style.foreground.palette.getRGB(Color.RGB.gray(255));
+
+                if (row == buffer.cursor.row and col == buffer.cursor.col) {
+                    std.mem.swap(Color.RGB, &back, &fore);
+                }
+
+                const back_color = c.SDL_MapSurfaceRGB(surface, back.r, back.g, back.b);
+                _ = c.SDL_FillSurfaceRect(surface, &c.SDL_Rect{
+                    .x = advance,
+                    .y = baseline - std.math.lossyCast(c_int, metrics.cell_height) - metrics.descender,
+                    .w = std.math.lossyCast(c_int, metrics.cell_width),
+                    .h = std.math.lossyCast(c_int, metrics.cell_height),
+                }, back_color);
+
+                if (!raster.is_color) {
+                    _ = c.SDL_SetSurfaceColorMod(raster.surface, fore.r, fore.g, fore.b);
+                }
+
                 _ = c.SDL_BlitSurface(raster.surface, null, surface, &c.SDL_Rect{
-                    .x = @intFromFloat(@floor(advance + raster.left)),
-                    .y = @intFromFloat(@floor(baseline - raster.top)),
+                    .x = advance + raster.left,
+                    .y = baseline - raster.top,
                     .w = raster.surface.w,
                     .h = raster.surface.h,
                 });
 
-                advance += manager.metrics.cell_width;
+                advance += std.math.lossyCast(c_int, manager.metrics.cell_width);
             }
 
-            baseline += manager.metrics.cell_height;
+            baseline += std.math.lossyCast(c_int, manager.metrics.cell_height);
         }
     }
 };
