@@ -1,7 +1,12 @@
 .{
     .name = "shitty",
     .version = "0.0.0",
-    .dependencies = .{},
+    .dependencies = .{
+        .tracy = .{
+            .url = "git+https://github.com/wolfpld/tracy?ref=v0.11.1#5d542dc09f3d9378d005092a4ad446bd405f819a",
+            .hash = "122022a478dccaed1309fb5d022f4041eec45d40c93a855ed24fad970774c2426d91",
+        },
+    },
     .paths = .{
         "build.zig",
         "build.zig.zon",

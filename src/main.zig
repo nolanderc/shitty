@@ -4,12 +4,16 @@ const FontManager = @import("FontManager.zig");
 const Buffer = @import("Buffer.zig");
 const pty = @import("pty.zig");
 const escapes = @import("escapes.zig");
+const tracy = @import("tracy");
 
 const logSDL = std.log.scoped(.SDL);
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){ .backing_allocator = std.heap.c_allocator };
     defer _ = gpa.deinit();
+
+    const zone = tracy.zone(@src(), "program");
+    defer zone.end();
 
     run(gpa.allocator()) catch |err| {
         const sdl_error = c.SDL_GetError();
@@ -25,7 +29,7 @@ pub fn main() !void {
 }
 
 fn run(alloc: std.mem.Allocator) !void {
-    _ = c.SDL_SetHint(c.SDL_HINT_FRAMEBUFFER_ACCELERATION, "0");
+    // _ = c.SDL_SetHint(c.SDL_HINT_FRAMEBUFFER_ACCELERATION, "0");
     _ = c.SDL_SetHint(c.SDL_HINT_NO_SIGNAL_HANDLERS, "1");
 
     if (!c.SDL_Init(c.SDL_INIT_VIDEO | c.SDL_INIT_EVENTS)) return error.SdlInit;
@@ -126,7 +130,12 @@ fn runEventLoop(app: *App, shell: *pty.Shell) !void {
         poll_timeout = null;
 
         var poll_timer = try std.time.Timer.start();
-        _ = try std.posix.poll(&poll_fds, timeout_ms);
+        {
+            const zone = tracy.zone(@src(), "poll");
+            defer zone.end();
+            zone.setColor(0xAA3333);
+            _ = try std.posix.poll(&poll_fds, timeout_ms);
+        }
         const poll_duration = poll_timer.read();
 
         if (poll_duration < 1 * std.time.ns_per_ms) {
@@ -560,13 +569,24 @@ const App = struct {
     }
 
     pub fn redraw(app: *App) !void {
-        app.needs_redraw = false;
+        const zone = tracy.zone(@src(), "redraw");
+        defer zone.end();
 
+        app.needs_redraw = false;
         try app.drawBuffer();
     }
 
     fn drawBuffer(app: *App) !void {
-        if (!c.SDL_ClearSurface(app.surface, 0.0, 0.0, 0.0, 1.0)) return error.SdlClearSurface;
+        {
+            const zone_clear = tracy.zone(@src(), "clear");
+            defer zone_clear.end();
+            if (!c.SDL_UpdateWindowSurface(app.window)) {
+                return error.SdlUpdateWindowSurface;
+            }
+            if (!c.SDL_ClearSurface(app.surface, 0.0, 0.0, 0.0, 1.0)) {
+                return error.SdlClearSurface;
+            }
+        }
 
         const buffer = app.buffer;
         const manager = app.font_manager;
@@ -587,6 +607,9 @@ const App = struct {
 
             var advance = padding_x;
             for (cells, 0..) |cell, col| {
+                const zone_cell = tracy.zone(@src(), "draw cell");
+                defer zone_cell.end();
+
                 const style = cell.style;
                 const flags = style.flags;
 
@@ -606,19 +629,27 @@ const App = struct {
                     std.mem.swap(Color.RGB, &back, &fore);
                 }
 
-                const back_color = c.SDL_MapSurfaceRGB(surface, back.r, back.g, back.b);
-                _ = c.SDL_FillSurfaceRect(surface, &c.SDL_Rect{
-                    .x = advance,
-                    .y = baseline - std.math.lossyCast(c_int, metrics.cell_height) - metrics.descender,
-                    .w = std.math.lossyCast(c_int, metrics.cell_width),
-                    .h = std.math.lossyCast(c_int, metrics.cell_height),
-                }, back_color);
+                {
+                    const zone_back = tracy.zone(@src(), "draw background");
+                    defer zone_back.end();
 
-                if (!raster.is_color) {
-                    _ = c.SDL_SetSurfaceColorMod(raster.surface, fore.r, fore.g, fore.b);
+                    const back_color = c.SDL_MapSurfaceRGB(surface, back.r, back.g, back.b);
+                    _ = c.SDL_FillSurfaceRect(surface, &c.SDL_Rect{
+                        .x = advance,
+                        .y = baseline - std.math.lossyCast(c_int, metrics.cell_height) - metrics.descender,
+                        .w = std.math.lossyCast(c_int, metrics.cell_width),
+                        .h = std.math.lossyCast(c_int, metrics.cell_height),
+                    }, back_color);
                 }
 
                 if (raster.surface.w != 0 and raster.surface.h != 0) {
+                    const zone_glyph = tracy.zone(@src(), "blit glyph");
+                    defer zone_glyph.end();
+
+                    if (!raster.is_color) {
+                        _ = c.SDL_SetSurfaceColorMod(raster.surface, fore.r, fore.g, fore.b);
+                    }
+
                     _ = c.SDL_BlitSurface(raster.surface, null, surface, &c.SDL_Rect{
                         .x = advance + raster.left,
                         .y = baseline - raster.top,
@@ -633,7 +664,13 @@ const App = struct {
             baseline += std.math.lossyCast(c_int, manager.metrics.cell_height);
         }
 
-        if (!c.SDL_UpdateWindowSurface(app.window)) return error.SdlUpdateWindowSurface;
+        {
+            const zone_present = tracy.zone(@src(), "present");
+            defer zone_present.end();
+            if (!c.SDL_UpdateWindowSurface(app.window)) {
+                return error.SdlUpdateWindowSurface;
+            }
+        }
     }
 };
 

@@ -19,6 +19,8 @@ pub fn build(b: *std.Build) void {
 
     const c = b.createModule(.{ .root_source_file = b.path("src/c.zig"), .target = target, .optimize = optimize });
     exe.root_module.addImport("c", c);
+    exe.root_module.addImport("tracy", tracyClient(b, .{ .target = target, .optimize = optimize }));
+
     exe.linkLibC();
     exe.linkSystemLibrary("SDL3");
     exe.linkSystemLibrary("fontconfig");
@@ -41,4 +43,45 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_unit_tests.step);
+}
+
+fn tracyClient(b: *std.Build, args: anytype) *std.Build.Module {
+    const module = b.addModule("tracy", .{ .root_source_file = b.path("src/tracy.zig") });
+    const options = b.addOptions();
+    module.addOptions("options", options);
+
+    const enable = b.option(bool, "tracy", "Enable Tracy profiler") orelse false;
+    options.addOption(bool, "enabled", enable);
+
+    if (enable) {
+        const dep = b.dependency("tracy", .{});
+
+        const c = b.addTranslateC(.{
+            .root_source_file = dep.path("public/tracy/TracyC.h"),
+            .target = args.target,
+            .optimize = args.optimize,
+        });
+        c.defineCMacro("TRACY_ENABLE", "1");
+
+        const lib = b.addStaticLibrary(.{
+            .name = "TracyClient",
+            .root_module = b.createModule(.{
+                .root_source_file = c.getOutput(),
+                .target = args.target,
+                .optimize = args.optimize,
+            }),
+        });
+        lib.addCSourceFile(.{
+            .file = dep.path("public/TracyClient.cpp"),
+            .flags = &.{"-DTRACY_ENABLE=1"},
+        });
+        lib.linkLibC();
+        lib.linkLibCpp();
+        lib.addIncludePath(dep.path("public"));
+
+        module.addImport("TracyC.h", lib.root_module);
+        module.linkLibrary(lib);
+    }
+
+    return module;
 }

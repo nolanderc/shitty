@@ -1,5 +1,6 @@
 const std = @import("std");
 const c = @import("c").includes;
+const tracy = @import("tracy");
 
 const Buffer = @import("Buffer.zig");
 
@@ -146,6 +147,9 @@ fn computeMetrics(manager: *FontManager) Metrics {
 }
 
 pub fn getGlyphRaster(manager: *FontManager, glyph: GlyphKey) !GlyphRaster {
+    const zone = tracy.zone(@src(), "lookup glyph");
+    defer zone.end();
+
     const entry = try manager.glyph_cache.getOrPut(manager.alloc, glyph);
     errdefer manager.glyph_cache.removeByPtr(entry.key_ptr);
     if (!entry.found_existing) entry.value_ptr.* = try manager.rasterizeGlyph(glyph);
@@ -153,6 +157,9 @@ pub fn getGlyphRaster(manager: *FontManager, glyph: GlyphKey) !GlyphRaster {
 }
 
 fn rasterizeGlyph(manager: *FontManager, glyph: GlyphKey) !GlyphRaster {
+    const zone = tracy.zone(@src(), "rasterizeGlyph");
+    defer zone.end();
+
     const face = manager.faces.items[@intFromEnum(glyph.face)];
 
     try FreeType.check(c.FT_Load_Glyph(face.ft, glyph.index, c.FT_LOAD_COLOR));
@@ -238,6 +245,9 @@ fn dumpSurfaceStderr(surface: *c.SDL_Surface) void {
 }
 
 pub fn mapCodepoint(manager: *FontManager, codepoint: u21, style: Style) ?GlyphKey {
+    const zone = tracy.zone(@src(), "mapCodepoint");
+    defer zone.end();
+
     const chain = manager.styles.get(style);
     var query = codepoint;
     while (true) {
