@@ -92,8 +92,6 @@ fn runEventLoop(app: *App, shell: *pty.Shell) !void {
 
     const POLL = std.posix.POLL;
 
-    const max_redraw_delay = 10 * std.time.ns_per_ms;
-
     var largest_seen_input_size: usize = std.mem.page_size;
     var last_redraw = try std.time.Instant.now();
     var poll_timeout: ?u64 = null;
@@ -103,6 +101,7 @@ fn runEventLoop(app: *App, shell: *pty.Shell) !void {
     // this number gets above some thresheld, we start throttling the drawing,
     // sacrificing some latency for higher IO throughput.
     var high_frequency_poll_count: u32 = 0;
+    const max_redraw_delay = 40 * std.time.ns_per_ms;
 
     while (app.running) {
         var poll_fds = [_]std.posix.pollfd{
@@ -183,6 +182,7 @@ fn runEventLoop(app: *App, shell: *pty.Shell) !void {
                 // there is a lot of IO currently, so unless we are hitting our
                 // deadline for delivering the next frame, we delay redrawing
                 // so that we can prioritize IO throughput.
+                // std.log.info("high frequency polling", .{});
                 const now = try std.time.Instant.now();
                 const time_since_redraw = now.since(last_redraw);
                 if (time_since_redraw < max_redraw_delay) {
@@ -191,12 +191,16 @@ fn runEventLoop(app: *App, shell: *pty.Shell) !void {
                 }
             }
 
+            var redraw_start = try std.time.Timer.start();
             app.redraw() catch |err| {
                 logSDL.err("could not redraw screen: {}", .{err});
                 if (@errorReturnTrace()) |error_trace| {
                     std.debug.dumpStackTrace(error_trace.*);
                 }
             };
+            const redraw_duration = redraw_start.read();
+            std.log.info("redraw_duration: {d}", .{std.math.lossyCast(f32, redraw_duration) / 1e6});
+
             last_redraw = try std.time.Instant.now();
         }
     }
@@ -356,8 +360,23 @@ const App = struct {
     fn processInput(app: *App) !void {
         var context: escapes.Context = undefined;
 
-        while (app.input_buffer.count != 0) {
+        process: while (app.input_buffer.count != 0) {
             const bytes = @constCast(app.input_buffer.readableSlice(0));
+
+            // fast path for plain ASCII characters.
+            for (bytes, 0..) |byte, index| {
+                if (std.ascii.isPrint(byte)) {
+                    app.buffer.write(byte);
+                } else {
+                    app.input_buffer.discard(index);
+                    if (index != 0) continue :process;
+                    break;
+                }
+            } else {
+                app.input_buffer.discard(bytes.len);
+                continue :process;
+            }
+
             const len, const command = escapes.parse(bytes, &context);
             const fmtSequence = std.json.fmt(bytes[0..@min(len, bytes.len)], .{});
 
@@ -543,14 +562,12 @@ const App = struct {
     pub fn redraw(app: *App) !void {
         app.needs_redraw = false;
 
-        if (!c.SDL_ClearSurface(app.surface, 0.0, 0.0, 0.0, 1.0)) return error.SdlClearSurface;
-
         try app.drawBuffer();
-
-        if (!c.SDL_UpdateWindowSurface(app.window)) return error.SdlUpdateWindowSurface;
     }
 
     fn drawBuffer(app: *App) !void {
+        if (!c.SDL_ClearSurface(app.surface, 0.0, 0.0, 0.0, 1.0)) return error.SdlClearSurface;
+
         const buffer = app.buffer;
         const manager = app.font_manager;
         const surface = app.surface;
@@ -601,18 +618,22 @@ const App = struct {
                     _ = c.SDL_SetSurfaceColorMod(raster.surface, fore.r, fore.g, fore.b);
                 }
 
-                _ = c.SDL_BlitSurface(raster.surface, null, surface, &c.SDL_Rect{
-                    .x = advance + raster.left,
-                    .y = baseline - raster.top,
-                    .w = raster.surface.w,
-                    .h = raster.surface.h,
-                });
+                if (raster.surface.w != 0 and raster.surface.h != 0) {
+                    _ = c.SDL_BlitSurface(raster.surface, null, surface, &c.SDL_Rect{
+                        .x = advance + raster.left,
+                        .y = baseline - raster.top,
+                        .w = raster.surface.w,
+                        .h = raster.surface.h,
+                    });
+                }
 
                 advance += std.math.lossyCast(c_int, manager.metrics.cell_width);
             }
 
             baseline += std.math.lossyCast(c_int, manager.metrics.cell_height);
         }
+
+        if (!c.SDL_UpdateWindowSurface(app.window)) return error.SdlUpdateWindowSurface;
     }
 };
 
