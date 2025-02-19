@@ -38,17 +38,116 @@ pub const GlyphKey = struct {
 };
 
 pub const GlyphRaster = struct {
-    surface: *c.SDL_Surface,
     left: i32,
     top: i32,
     advance: f32,
+    flags: Flags,
+    bitmap: Bitmap,
 
-    /// Some glyphs may already have their own color (eg., emojis) in which
-    /// case we shouldn't modulate their color.
-    is_color: bool,
+    const Flags = packed struct(u32) {
+        /// Some glyphs may already have their own color (eg., emojis) in which
+        /// case we shouldn't modulate their color.
+        is_color: bool,
+        _: u31 = 0,
+    };
 
-    pub fn deinit(raster: GlyphRaster) void {
-        c.SDL_DestroySurface(raster.surface);
+    pub fn deinit(raster: GlyphRaster, alloc: std.mem.Allocator) void {
+        raster.bitmap.deinit(alloc);
+    }
+};
+
+pub const Bitmap = struct {
+    width: u32,
+    height: u32,
+    buffer: []Pixel,
+
+    const Pixel = [4]u8;
+
+    pub fn init(alloc: std.mem.Allocator, width: u32, height: u32) !Bitmap {
+        const buffer = try alloc.alloc(Pixel, @as(usize, width) * height);
+        return .{ .width = width, .height = height, .buffer = buffer };
+    }
+
+    pub fn deinit(bitmap: Bitmap, alloc: std.mem.Allocator) void {
+        alloc.free(bitmap.buffer);
+    }
+
+    pub fn getBGRA(bitmap: Bitmap) []u8 {
+        const size = @as(usize, bitmap.width) * bitmap.height;
+        return std.mem.sliceAsBytes(bitmap.buffer[0..size]);
+    }
+
+    pub fn dump(bitmap: Bitmap) void {
+        for (0..@intCast(bitmap.height)) |row| {
+            for (0..@intCast(bitmap.width)) |col| {
+                const index = col + row * bitmap.width;
+                const b, const g, const r, const a = bitmap.buffer[index];
+                const fg: u8 = if (@max(r, g, b) > 0x7f) 0x00 else 0xff;
+                std.debug.print("\x1b[38;2;{};{};{}m\x1b[48;2;{};{};{}m{x:02}", .{ fg, fg, fg, r, g, b, a });
+            }
+            std.debug.print("\x1b[m\n", .{});
+        }
+    }
+
+    pub fn scaleToFitHeight(bitmap: *Bitmap, alloc: std.mem.Allocator, target_height: u32) void {
+        if (bitmap.height <= target_height) return;
+        if (target_height == 0) {
+            bitmap.deinit(alloc);
+            bitmap.* = .{ .width = 0, .height = 0, .buffer = &.{} };
+            return;
+        }
+
+        const target_width = target_height * bitmap.width / bitmap.height;
+
+        // First we try to do as many pixel-perfect downscales as possible.
+        // These shoud be much faster than fractional scaling.
+        while (bitmap.height / 2 >= target_height) {
+            const width = bitmap.width;
+            const height = bitmap.height;
+
+            const new_width = (width / 2) + (width & 1);
+            const new_height = (height / 2) + (height & 1);
+
+            for (0..new_height) |row| {
+                const row0 = @min(height - 1, 2 * row);
+                const row1 = @min(height - 1, 2 * row + 1);
+
+                for (0..new_width) |col| {
+                    const col0 = @min(width - 1, 2 * col);
+                    const col1 = @min(width - 1, 2 * col + 1);
+
+                    const px00 = bitmap.buffer[col0 + row0 * width];
+                    const px10 = bitmap.buffer[col1 + row0 * width];
+                    const px01 = bitmap.buffer[col0 + row1 * width];
+                    const px11 = bitmap.buffer[col1 + row1 * width];
+
+                    var out: Pixel = undefined;
+                    inline for (&out, px00, px10, px01, px11) |*res, px0, px1, px2, px3| {
+                        const sum = @as(u16, px0) + @as(u16, px1) + @as(u16, px2) + @as(u16, px3);
+                        res.* = @truncate(sum / 4);
+                    }
+                    bitmap.buffer[col + row * new_width] = out;
+                }
+            }
+
+            bitmap.width = new_width;
+            bitmap.height = new_height;
+        }
+
+        if (bitmap.height > target_height) {
+            // Finally, we perform a fractional scaling step down to the target resolution.
+            // ... TODO ...
+            logFT.warn(
+                "TODO: fractional scaling of bitmap glyph {}x{} -> {}x{}",
+                .{ bitmap.width, bitmap.height, target_width, target_height },
+            );
+        }
+
+        // try to shrink the buffer (if possible)
+        const new_size = @as(usize, bitmap.width) * bitmap.height;
+        if (alloc.resize(bitmap.buffer, new_size)) {
+            bitmap.buffer.len = new_size;
+        }
     }
 };
 
@@ -73,7 +172,7 @@ pub fn deinit(manager: *FontManager) void {
 
 fn clearGlyphCache(manager: *FontManager) void {
     var glyphs = manager.glyph_cache.valueIterator();
-    while (glyphs.next()) |raster| raster.deinit();
+    while (glyphs.next()) |raster| raster.deinit(manager.alloc);
     manager.glyph_cache.clearRetainingCapacity();
     manager.unmappable_codepoints.clearAndFree(manager.alloc);
 }
@@ -168,33 +267,26 @@ fn rasterizeGlyph(manager: *FontManager, glyph: GlyphKey) !GlyphRaster {
 
     try FreeType.check(c.FT_Render_Glyph(slot, c.FT_RENDER_MODE_NORMAL));
 
-    const bitmap = &slot.bitmap;
-    const pixel_mode: FreeType.PixelMode = @enumFromInt(bitmap.pixel_mode);
+    const buffer = slot.bitmap.buffer;
+    const width = slot.bitmap.width;
+    const height = slot.bitmap.rows;
+    const pixel_mode: FreeType.PixelMode = @enumFromInt(slot.bitmap.pixel_mode);
 
-    var surface: *c.SDL_Surface = c.SDL_CreateSurface(
-        @intCast(bitmap.width),
-        @intCast(bitmap.rows),
-        c.SDL_PIXELFORMAT_BGRA32,
-    ) orelse return error.OutOfMemory;
-    errdefer c.SDL_DestroySurface(surface);
-    _ = c.SDL_SetSurfaceBlendMode(surface, c.SDL_BLENDMODE_BLEND_PREMULTIPLIED);
+    var bitmap = try Bitmap.init(manager.alloc, width, height);
+    const bitmap_pitch: usize = @abs(slot.bitmap.pitch);
 
-    const surface_pixels: [*][4]u8 = @ptrCast(surface.pixels orelse undefined);
-    const surface_pitch: usize = @abs(@divExact(surface.pitch, 4));
-
-    const bitmap_pitch: usize = @abs(bitmap.pitch);
     switch (pixel_mode) {
         .gray => {
-            for (0..bitmap.rows) |row| {
-                const row_bytes = bitmap.buffer[row * bitmap_pitch ..][0..bitmap.width];
-                const surface_bgra = surface_pixels[row * surface_pitch ..][0..bitmap.width];
+            for (0..height) |row| {
+                const row_bytes = buffer[row * bitmap_pitch ..][0..width];
+                const surface_bgra = bitmap.buffer[row * width ..][0..width];
                 for (row_bytes, surface_bgra) |gray, *bgra| bgra.* = [1]u8{gray} ** 4;
             }
         },
         .bgra => {
-            for (0..bitmap.rows) |row| {
-                const row_bytes = bitmap.buffer[row * bitmap_pitch ..][0 .. bitmap.width * 4];
-                const surface_bgra = surface_pixels[row * surface_pitch ..][0..bitmap.width];
+            for (0..height) |row| {
+                const row_bytes = buffer[row * bitmap_pitch ..][0 .. width * 4];
+                const surface_bgra = bitmap.buffer[row * width ..][0..width];
                 @memcpy(std.mem.sliceAsBytes(surface_bgra), std.mem.sliceAsBytes(row_bytes));
             }
         },
@@ -207,41 +299,17 @@ fn rasterizeGlyph(manager: *FontManager, glyph: GlyphKey) !GlyphRaster {
     var scale: f32 = 1.0;
 
     if (is_bitmap) {
-        const target_height = std.math.lossyCast(i32, manager.metrics.cell_height);
-
-        while (surface.h > target_height) {
-            const next_height = @max(target_height, @divTrunc(surface.h, 2));
-            const next_width = @divTrunc(next_height * surface.w, surface.h);
-            const scaled = c.SDL_ScaleSurface(surface, next_width, next_height, c.SDL_SCALEMODE_LINEAR);
-            c.SDL_DestroySurface(surface);
-            surface = scaled;
-        }
-
-        scale = @as(f32, @floatFromInt(surface.w)) / @as(f32, @floatFromInt(bitmap.width));
+        bitmap.scaleToFitHeight(manager.alloc, manager.metrics.cell_height);
+        scale = @as(f32, @floatFromInt(manager.metrics.cell_height)) / @as(f32, @floatFromInt(height));
     }
 
     return .{
-        .surface = surface,
         .left = @intFromFloat(@floor(scale * @as(f32, @floatFromInt(slot.bitmap_left)))),
         .top = @intFromFloat(@floor(scale * @as(f32, @floatFromInt(slot.bitmap_top)))),
         .advance = scale * @as(f32, @floatFromInt(slot.advance.x)) / (1 << 6),
-        .is_color = pixel_mode == .bgra,
+        .flags = .{ .is_color = pixel_mode == .bgra },
+        .bitmap = bitmap,
     };
-}
-
-fn dumpSurfaceStderr(surface: *c.SDL_Surface) void {
-    for (0..@intCast(surface.h)) |row| {
-        for (0..@intCast(surface.w)) |col| {
-            var r: u8 = 0;
-            var g: u8 = 0;
-            var b: u8 = 0;
-            var a: u8 = 0;
-            _ = c.SDL_ReadSurfacePixel(surface, @intCast(col), @intCast(row), &r, &g, &b, &a);
-            const fg: u8 = if (@max(r, g, b) > 0x7f) 0x00 else 0xff;
-            std.debug.print("\x1b[38;2;{};{};{}m\x1b[48;2;{};{};{}m{x:02}", .{ fg, fg, fg, r, g, b, a });
-        }
-        std.debug.print("\x1b[m\n", .{});
-    }
 }
 
 pub fn mapCodepoint(manager: *FontManager, codepoint: u21, style: Style) ?GlyphKey {
@@ -376,6 +444,7 @@ pub const FreeType = struct {
     pub fn init() !FreeType {
         var freetype: FreeType = undefined;
         try check(c.FT_Init_FreeType(&freetype.lib));
+
         return freetype;
     }
 

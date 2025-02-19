@@ -19,14 +19,18 @@ pub fn build(b: *std.Build) void {
 
     const c = b.createModule(.{ .root_source_file = b.path("src/c.zig"), .target = target, .optimize = optimize });
     exe.root_module.addImport("c", c);
+
     exe.root_module.addImport("tracy", tracyClient(b, .{ .target = target, .optimize = optimize }));
 
     exe.linkLibC();
-    exe.linkSystemLibrary("SDL3");
     exe.linkSystemLibrary("fontconfig");
     exe.linkSystemLibrary("freetype");
     exe.linkSystemLibrary("harfbuzz");
     exe.linkSystemLibrary("utf8proc");
+    exe.linkSystemLibrary("X11");
+    exe.linkSystemLibrary("xrender");
+    exe.linkSystemLibrary("xcb");
+    exe.linkSystemLibrary("xcb-render");
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());

@@ -9,10 +9,14 @@ pkgs.mkShell {
     zls.default
 
     # Dependencies
-    pkgs.sdl3.dev
     pkgs.fontconfig.dev
     pkgs.freetype.dev
     pkgs.harfbuzz.dev
     pkgs.utf8proc
+
+    pkgs.xorg.libX11.dev
+    pkgs.xorg.libXrender.dev
+    pkgs.xorg.libXft.dev
+    pkgs.xorg.libxcb.dev
   ];
 }
