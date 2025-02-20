@@ -8,6 +8,7 @@ pub const Command = union(enum) {
 
     codepoint: u21,
 
+    tab,
     retline,
     newline,
     backspace,
@@ -90,6 +91,7 @@ pub fn parse(bytes: []const u8, context: *Context) ParseResult {
 
         '\r' => return .{ 1, .retline },
         '\n' => return .{ 1, .newline },
+        '\t' => return .{ 1, .tab },
 
         ESC => {
             if (bytes.len < 2) return .{ 2, .incomplete };

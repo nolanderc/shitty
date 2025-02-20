@@ -235,7 +235,8 @@ pub const Cell = struct {
 
                 const BitsRgb = packed struct(u3) { r: bool, g: bool, b: bool };
 
-                for (palette[0..8], 0..) |*rgb, index| {
+                palette[0] = .{ .r = 0, .g = 0, .b = 0 };
+                for (palette[1..8], 1..) |*rgb, index| {
                     const bits: BitsRgb = @bitCast(@as(u3, @truncate(index)));
                     rgb.r = if (bits.r) 205 else 80;
                     rgb.g = if (bits.g) 205 else 80;

@@ -14,9 +14,9 @@ pkgs.mkShell {
     pkgs.harfbuzz.dev
     pkgs.utf8proc
 
-    pkgs.xorg.libX11.dev
-    pkgs.xorg.libXrender.dev
-    pkgs.xorg.libXft.dev
-    pkgs.xorg.libxcb.dev
+    pkgs.xorg.libX11
+    pkgs.xorg.libXrender
+    pkgs.xorg.libXft
+    pkgs.xorg.libxcb
   ];
 }

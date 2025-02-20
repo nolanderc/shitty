@@ -20,7 +20,7 @@ pub fn build(b: *std.Build) void {
     const c = b.createModule(.{ .root_source_file = b.path("src/c.zig"), .target = target, .optimize = optimize });
     exe.root_module.addImport("c", c);
 
-    exe.root_module.addImport("tracy", tracyClient(b, .{ .target = target, .optimize = optimize }));
+    exe.root_module.addImport("tracy", tracyClient(b, .{ .target = target, .optimize = .ReleaseFast }));
 
     exe.linkLibC();
     exe.linkSystemLibrary("fontconfig");
@@ -63,7 +63,7 @@ fn tracyClient(b: *std.Build, args: anytype) *std.Build.Module {
         const c = b.addTranslateC(.{
             .root_source_file = dep.path("public/tracy/TracyC.h"),
             .target = args.target,
-            .optimize = args.optimize,
+            .optimize = .ReleaseFast,
         });
         c.defineCMacro("TRACY_ENABLE", "1");
 
@@ -72,7 +72,7 @@ fn tracyClient(b: *std.Build, args: anytype) *std.Build.Module {
             .root_module = b.createModule(.{
                 .root_source_file = c.getOutput(),
                 .target = args.target,
-                .optimize = args.optimize,
+                .optimize = .ReleaseFast,
             }),
         });
         lib.addCSourceFile(.{

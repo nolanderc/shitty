@@ -70,7 +70,7 @@ fn runEventLoop(app: *App, shell: *pty.Shell) !void {
 
     const POLL = std.posix.POLL;
 
-    var largest_seen_input_size: usize = std.mem.page_size;
+    var largest_seen_input_size: usize = std.heap.pageSize();
     var last_redraw = try std.time.Instant.now();
     var poll_timeout: ?u64 = null;
 
@@ -217,17 +217,55 @@ pub const App = struct {
         app.output_buffer.deinit();
     }
 
+    /// Attempts to handle the shortcut combination, returning `true` if the
+    /// shortcut was properly dispatched (preventing text input for the key) or
+    /// `false` if the shortcut is unbound and should produce text.
+    pub fn handleShortcut(app: *App, mods: platform.Modifiers, key: platform.Key) !bool {
+        std.log.debug("shortcut: {s}{s}{s}{s}", .{
+            if (mods.ctrl) "ctrl+" else "",
+            if (mods.alt) "alt+" else "",
+            if (mods.shift) "shift+" else "",
+            @tagName(key),
+        });
+
+        switch (key) {
+            .escape => {
+                if (mods.shift) {
+                    app.x11.should_close = true;
+                    return true;
+                }
+            },
+            .@"1" => {
+                if (mods.ctrl) {
+                    try app.adjustFontSize(1.0 / 1.1);
+                    return true;
+                }
+            },
+            .@"2" => {
+                if (mods.ctrl) {
+                    try app.adjustFontSize(1.1);
+                    return true;
+                }
+            },
+            else => {},
+        }
+
+        return false;
+    }
+
     fn adjustFontSize(app: *App, multiplier: f32) !void {
         const new_size = app.font_manager.ptsize * multiplier;
         if (new_size < 8) return;
 
         try app.font_manager.setSize(new_size);
+        app.x11.invalidateCaches();
+
         try app.updateBufferSize();
-        app.needs_redraw = true;
+        app.x11.needs_redraw = true;
     }
 
-    fn updateBufferSize(app: *App) !void {
-        const window_size = try getWindowSize(app.window);
+    pub fn updateBufferSize(app: *App) !void {
+        const window_size = try app.x11.getWindowSize();
         const new_buffer_size = try computeBufferSize(window_size, app.font_manager, app.buffer.size.scrollback_rows);
         var new_buffer = try Buffer.init(app.alloc, new_buffer_size);
         app.buffer.reflowInto(&new_buffer);
@@ -283,6 +321,13 @@ pub const App = struct {
                 .codepoint => |codepoint| app.buffer.write(codepoint),
                 .retline => app.buffer.setCursorPosition(.{ .col = .{ .abs = 0 } }),
                 .newline => app.buffer.setCursorPosition(.{ .row = .{ .rel = 1 } }),
+
+                .tab => {
+                    while (true) {
+                        app.buffer.write(' ');
+                        if (app.buffer.cursor.col % 8 == 0) break;
+                    }
+                },
 
                 .backspace => {
                     app.buffer.setCursorPosition(.{ .col = .{ .rel = -1 } });
