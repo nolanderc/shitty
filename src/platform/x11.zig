@@ -250,24 +250,31 @@ pub const X11 = struct {
             while (row < size.rows) : (row += 1) {
                 const cells = buffer.getRow(row);
                 for (cells) |cell| {
+                    const flags = cell.style.flags;
                     const codepoint = cell.codepoint;
+                    const style = FontManager.Style{ .bold = flags.bold, .italic = flags.italic };
 
-                    if (codepoint >= x11.mapped_codepoints.bit_length) {
-                        const len_required = codepoint + 1;
+                    const index: u23 = @bitCast(GlyphIndex{
+                        .style = style,
+                        .codepoint = codepoint,
+                    });
+
+                    if (index >= x11.mapped_codepoints.bit_length) {
+                        const len_required = index + 1;
                         const len_desired = @max(128, 2 * x11.mapped_codepoints.bit_length);
-                        const len_maximum = 1 << 21;
+                        const len_maximum = 1 << 23;
                         try x11.mapped_codepoints.resize(alloc, @min(len_maximum, @max(len_desired, len_required)), false);
                     }
-                    if (x11.mapped_codepoints.isSet(codepoint)) continue;
+                    if (x11.mapped_codepoints.isSet(index)) continue;
 
                     const zone_raster = tracy.zone(@src(), "get glyph");
                     defer zone_raster.end();
 
-                    const glyph = manager.mapCodepoint(codepoint, .regular) orelse continue;
+                    const glyph = manager.mapCodepoint(codepoint, style) orelse continue;
                     const raster = try manager.getGlyphRaster(glyph);
 
                     try glyphs.append(alloc, .{
-                        .id = codepoint,
+                        .id = index,
                         .info = .{
                             .width = @intCast(raster.bitmap.width),
                             .height = @intCast(raster.bitmap.height),
@@ -279,7 +286,7 @@ pub const X11 = struct {
                     });
                     try image_data.appendSlice(alloc, raster.bitmap.getBGRA());
 
-                    x11.mapped_codepoints.set(codepoint);
+                    x11.mapped_codepoints.set(index);
                 }
             }
 
@@ -310,7 +317,7 @@ pub const X11 = struct {
             const foreground_colors = try alloc.alloc(Pixel, size.cols * size.rows);
             defer alloc.free(foreground_colors);
 
-            const bg_default = Buffer.Cell.Style.Color.xterm_256color_palette[1];
+            const bg_default = Buffer.Cell.Style.Color.xterm_256color_palette[0];
             const fg_default = Buffer.Cell.Style.Color.xterm_256color_palette[15];
 
             {
@@ -328,10 +335,17 @@ pub const X11 = struct {
                     const row_start = codepoints.items.ptr + codepoints.items.len;
 
                     for (cells, 0..) |cell, col| {
-                        const codepoint = cell.codepoint;
-                        codepoints.appendAssumeCapacity(codepoint);
-
                         const flags = cell.style.flags;
+
+                        const style = FontManager.Style{ .bold = flags.bold, .italic = flags.italic };
+
+                        const index = GlyphIndex{
+                            .style = style,
+                            .codepoint = cell.codepoint,
+                        };
+
+                        codepoints.appendAssumeCapacity(@as(u23, @bitCast(index)));
+
                         const bg = cell.style.background;
                         const fg = cell.style.foreground;
 
@@ -623,3 +637,8 @@ fn getWindowGeometry(display: *c.Display, window: c.Window) [2]u32 {
     _ = c.XGetGeometry(display, window, &root, &x, &y, &w, &h, &bw, &bh);
     return .{ w, h };
 }
+
+const GlyphIndex = packed struct(u23) {
+    style: FontManager.Style,
+    codepoint: u21,
+};

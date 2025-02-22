@@ -406,8 +406,8 @@ pub const App = struct {
                         1 => brush.flags.bold = true,
                         22 => brush.flags.bold = false,
 
-                        3 => brush.flags.italics = true,
-                        23 => brush.flags.italics = false,
+                        3 => brush.flags.italic = true,
+                        23 => brush.flags.italic = false,
 
                         4 => brush.flags.underline = true,
                         24 => brush.flags.underline = false,

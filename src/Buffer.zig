@@ -179,7 +179,7 @@ pub const Cell = struct {
             truecolor_background: bool = false,
 
             bold: bool = false,
-            italics: bool = false,
+            italic: bool = false,
             underline: bool = false,
 
             _: u11 = 0,

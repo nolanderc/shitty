@@ -14,18 +14,16 @@ alloc: std.mem.Allocator,
 finder: FontFinder,
 freetype: FreeType,
 faces: std.ArrayListUnmanaged(Face) = .{},
-styles: std.EnumArray(Style, FallbackChain) = .{ .values = [1]FallbackChain{.{}} ** 4 },
+styles: [4]FallbackChain = [1]FallbackChain{.{}} ** 4,
 glyph_cache: std.AutoHashMapUnmanaged(GlyphKey, GlyphRaster) = .{},
 ptsize: f32,
 metrics: Metrics,
 
 unmappable_codepoints: std.AutoHashMapUnmanaged(u21, void) = .{},
 
-pub const Style = enum {
-    regular,
-    bold,
-    italic,
-    bold_italic,
+pub const Style = packed struct(u2) {
+    bold: bool = false,
+    italic: bool = false,
 };
 
 pub const FallbackChain = struct { faces: []FaceIndex = &.{} };
@@ -162,7 +160,7 @@ pub fn deinit(manager: *FontManager) void {
     manager.clearGlyphCache();
     manager.glyph_cache.deinit(manager.alloc);
 
-    for (manager.styles.values) |chain| manager.alloc.free(chain.faces);
+    for (manager.styles) |chain| manager.alloc.free(chain.faces);
     for (manager.faces.items) |face| face.deinit();
 
     manager.faces.deinit(manager.alloc);
@@ -192,12 +190,14 @@ pub fn init(alloc: std.mem.Allocator, family: [*:0]const u8, ptsize: f32) !FontM
     };
     errdefer manager.deinit();
 
-    for (std.meta.tags(Style)) |style| {
+    for (0..4) |style_index| {
+        const style: Style = @bitCast(@as(u2, @truncate(style_index)));
+
         var iterator = try manager.finder.find(family, style);
         defer iterator.deinit();
 
         const chain_size = iterator.count();
-        if (chain_size == 0 and style == .regular) return error.NotFound;
+        if (chain_size == 0 and !style.bold and !style.italic) return error.NotFound;
 
         const chain = try alloc.alloc(FaceIndex, chain_size);
         errdefer alloc.free(chain);
@@ -210,7 +210,7 @@ pub fn init(alloc: std.mem.Allocator, family: [*:0]const u8, ptsize: f32) !FontM
             try manager.faces.append(alloc, face);
         }
 
-        manager.styles.set(style, .{ .faces = chain });
+        manager.styles[style_index] = .{ .faces = chain };
     }
 
     manager.metrics = manager.computeMetrics();
@@ -226,7 +226,7 @@ pub fn setSize(manager: *FontManager, ptsize: f32) !void {
 }
 
 fn computeMetrics(manager: *FontManager) Metrics {
-    const primary_index = manager.styles.get(.regular).faces[0];
+    const primary_index = manager.styles[0].faces[0];
     const primary: *c.FT_FaceRec = manager.faces.items[@intFromEnum(primary_index)].ft;
     const pt_scale = manager.ptsize / std.math.lossyCast(f32, primary.units_per_EM);
 
@@ -316,7 +316,7 @@ pub fn mapCodepoint(manager: *FontManager, codepoint: u21, style: Style) ?GlyphK
     const zone = tracy.zone(@src(), "mapCodepoint");
     defer zone.end();
 
-    const chain = manager.styles.get(style);
+    const chain = manager.styles[@as(u2, @bitCast(style))];
     var query = codepoint;
     while (true) {
         for (chain.faces) |face_index| {
@@ -373,15 +373,17 @@ pub const FontFinder = struct {
 
         _ = c.FcPatternAddString(pattern, c.FC_FAMILY, family);
 
-        _ = c.FcPatternAddInteger(pattern, c.FC_WEIGHT, switch (style) {
-            .bold, .bold_italic => c.FC_WEIGHT_BOLD,
-            else => c.FC_WEIGHT_REGULAR,
-        });
+        _ = c.FcPatternAddInteger(
+            pattern,
+            c.FC_WEIGHT,
+            if (style.bold) c.FC_WEIGHT_BOLD else c.FC_WEIGHT_REGULAR,
+        );
 
-        _ = c.FcPatternAddInteger(pattern, c.FC_SLANT, switch (style) {
-            .italic, .bold_italic => c.FC_SLANT_ITALIC,
-            else => c.FC_SLANT_ROMAN,
-        });
+        _ = c.FcPatternAddInteger(
+            pattern,
+            c.FC_SLANT,
+            if (style.italic) c.FC_SLANT_ITALIC else c.FC_SLANT_ROMAN,
+        );
 
         if (c.FcConfigSubstitute(finder.fontconfig, pattern, c.FcMatchPattern) != c.FcTrue) return error.Substitute;
         c.FcDefaultSubstitute(pattern);
