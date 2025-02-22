@@ -109,7 +109,7 @@ pub const X11 = struct {
     pub fn getDisplayScale(x11: *X11) !f32 {
         _ = x11; // autofix
         // TODO: determine properly
-        return 1.0;
+        return 2.0;
     }
 
     pub fn setWindowTitle(x11: *X11, title: [:0]const u8) void {
@@ -229,14 +229,12 @@ pub const X11 = struct {
         const alloc = x11.alloc;
         const display = x11.display;
         const size = buffer.size;
-        const surface = x11.window_surface;
-        const picture = surface.picture;
 
         const grid_width = size.cols * manager.metrics.cell_width;
         const grid_height = size.rows * manager.metrics.cell_height;
 
-        const padding_x = (std.math.lossyCast(i32, surface.width) -| std.math.lossyCast(i32, grid_width)) >> 1;
-        const padding_y = (std.math.lossyCast(i32, surface.height) -| std.math.lossyCast(i32, grid_height)) >> 1;
+        const padding_x = (std.math.lossyCast(i32, x11.window_surface.width) -| std.math.lossyCast(i32, grid_width)) >> 1;
+        const padding_y = (std.math.lossyCast(i32, x11.window_surface.height) -| std.math.lossyCast(i32, grid_height)) >> 1;
 
         {
             const zone_missing_codepoints = tracy.zone(@src(), "detect unmapped codepoints");
@@ -312,7 +310,7 @@ pub const X11 = struct {
             const foreground_colors = try alloc.alloc(Pixel, size.cols * size.rows);
             defer alloc.free(foreground_colors);
 
-            const bg_default = Buffer.Cell.Style.Color.xterm_256color_palette[0];
+            const bg_default = Buffer.Cell.Style.Color.xterm_256color_palette[1];
             const fg_default = Buffer.Cell.Style.Color.xterm_256color_palette[15];
 
             {
@@ -371,15 +369,26 @@ pub const X11 = struct {
             const zone_composit = tracy.zone(@src(), "composit frame");
             defer zone_composit.end();
 
-            // clear screen
-            c.XRenderFillRectangle(display, c.PictOpClear, picture, &.{}, 0, 0, surface.width, surface.height);
+            const window_width = x11.window_surface.width;
+            const window_height = x11.window_surface.height;
+
+            const background_buffer = try Surface.init(display, x11.render.formats.rgb24, window_width, window_height);
+            defer background_buffer.deinit(display);
+
+            const bg_fill = c.XRenderColor{
+                .red = @as(u16, bg_default.r) << 8 | bg_default.r,
+                .green = @as(u16, bg_default.g) << 8 | bg_default.r,
+                .blue = @as(u16, bg_default.b) << 8 | bg_default.r,
+                .alpha = 0xFFFF,
+            };
+            c.XRenderFillRectangle(display, c.PictOpSrc, background_buffer.picture, &bg_fill, 0, 0, window_width, window_height);
 
             const background_small = try Surface.init(display, x11.render.formats.rgb24, size.cols, size.rows);
             defer background_small.deinit(display);
             background_small.fill(display, x11.graphics_context, background_colors);
             background_small.blitScaled(
                 display,
-                picture,
+                background_buffer.picture,
                 .{ .x = padding_x, .y = padding_y, .width = grid_width, .height = grid_height },
             );
 
@@ -387,7 +396,7 @@ pub const X11 = struct {
             defer foreground_small.deinit(display);
             foreground_small.fill(display, x11.graphics_context, foreground_colors);
 
-            const foreground = try Surface.init(display, x11.render.formats.rgb24, surface.width, surface.height);
+            const foreground = try Surface.init(display, x11.render.formats.rgb24, window_width, window_height);
             defer foreground.deinit(display);
             foreground_small.blitScaled(
                 display,
@@ -399,7 +408,7 @@ pub const X11 = struct {
                 display,
                 c.PictOpOver,
                 foreground.picture,
-                picture,
+                background_buffer.picture,
                 null,
                 0,
                 0,
@@ -407,6 +416,22 @@ pub const X11 = struct {
                 0,
                 glyph_runs.items.ptr,
                 @intCast(glyph_runs.items.len),
+            );
+
+            c.XRenderComposite(
+                display,
+                c.PictOpSrc,
+                background_buffer.picture,
+                0,
+                x11.window_surface.picture,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                window_width,
+                window_height,
             );
         }
 
@@ -511,9 +536,12 @@ const Surface = struct {
         const zone = tracy.zone(@src(), "Surface.blitScaled");
         defer zone.end();
 
+        const scale_x: i32 = @intCast((surface.width << 16) / area.width);
+        const scale_y: i32 = @intCast((surface.height << 16) / area.height);
+
         var transform = c.XTransform{ .matrix = .{
-            .{ @intCast((surface.width << 16) / area.width), 0 << 16, 0 << 16 },
-            .{ 0 << 16, @intCast((surface.height << 16) / area.height), 0 << 16 },
+            .{ scale_x, 0 << 16, 0 << 16 },
+            .{ 0 << 16, scale_y, 0 << 16 },
             .{ 0 << 16, 0 << 16, 1 << 16 },
         } };
         c.XRenderSetPictureTransform(display, surface.picture, &transform);
