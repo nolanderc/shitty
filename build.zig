@@ -29,8 +29,6 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("utf8proc");
     exe.linkSystemLibrary("X11");
     exe.linkSystemLibrary("xrender");
-    exe.linkSystemLibrary("xcb");
-    exe.linkSystemLibrary("xcb-render");
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
