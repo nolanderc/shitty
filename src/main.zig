@@ -60,7 +60,6 @@ fn run(alloc: std.mem.Allocator) !void {
 
 fn runEventLoop(app: *App, shell: *pty.Shell) !void {
     const display_file = app.x11.file();
-    std.log.info("Display FD: {}", .{display_file});
 
     _ = try std.posix.fcntl(
         shell.io.handle,
@@ -92,36 +91,40 @@ fn runEventLoop(app: *App, shell: *pty.Shell) !void {
         const poll_display = &poll_fds[0];
         const poll_shell = &poll_fds[1];
 
-        if (app.output_buffer.count != 0) {
-            // wait until we can write to the shell
-            poll_shell.events |= POLL.OUT;
-        }
-
-        const timeout_ms: i32 = if (poll_timeout) |timeout|
-            std.math.lossyCast(i32, timeout / std.time.ns_per_ms)
-        else
-            -1;
-        poll_timeout = null;
-
-        var poll_timer = try std.time.Timer.start();
-        {
-            const zone = tracy.zone(@src(), "poll");
-            defer zone.end();
-            zone.setColor(0xAA3333);
-            _ = try std.posix.poll(&poll_fds, timeout_ms);
-        }
-        const poll_duration = poll_timer.read();
-
-        if (poll_duration < 1 * std.time.ns_per_ms) {
-            high_frequency_poll_count +|= 1;
+        if (app.x11.hasPendingEvent()) {
+            poll_display.revents = POLL.IN;
         } else {
-            high_frequency_poll_count = 0;
-        }
+            if (app.output_buffer.count != 0) {
+                // wait until we can write to the shell
+                poll_shell.events |= POLL.OUT;
+            }
 
-        for (poll_fds) |fd| {
-            if (fd.revents & POLL.NVAL != 0) {
-                std.log.err("file descriptor unexpectedly closed", .{});
-                return error.PollInvalid;
+            const timeout_ms: i32 = if (poll_timeout) |timeout|
+                std.math.lossyCast(i32, timeout / std.time.ns_per_ms)
+            else
+                -1;
+            poll_timeout = null;
+
+            var poll_timer = try std.time.Timer.start();
+            {
+                const zone = tracy.zone(@src(), "poll");
+                defer zone.end();
+                zone.setColor(0xAA3333);
+                _ = try std.posix.poll(&poll_fds, timeout_ms);
+            }
+            const poll_duration = poll_timer.read();
+
+            if (poll_duration < 1 * std.time.ns_per_ms) {
+                high_frequency_poll_count +|= 1;
+            } else {
+                high_frequency_poll_count = 0;
+            }
+
+            for (poll_fds) |fd| {
+                if (fd.revents & POLL.NVAL != 0) {
+                    std.log.err("file descriptor unexpectedly closed", .{});
+                    return error.PollInvalid;
+                }
             }
         }
 

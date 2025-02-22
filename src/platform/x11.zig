@@ -116,10 +116,14 @@ pub const X11 = struct {
         _ = c.XStoreName(x11.display, x11.window, title.ptr);
     }
 
+    pub fn hasPendingEvent(x11: *X11) bool {
+        return c.XPending(x11.display) != 0;
+    }
+
     pub fn pollEvent(x11: *X11, app: *App) !void {
         const display = x11.display;
         var event: c.XEvent = undefined;
-        while (c.XPending(display) != 0) {
+        while (x11.hasPendingEvent()) {
             _ = c.XNextEvent(display, &event);
 
             switch (event.type) {
@@ -390,13 +394,6 @@ pub const X11 = struct {
                 foreground.picture,
                 .{ .x = padding_x, .y = padding_y, .width = grid_width, .height = grid_height },
             );
-
-            // var transform = c.XTransform{ .matrix = .{
-            //     .{ 1 << 16, 0 << 16, padding_x << 16 },
-            //     .{ 0 << 16, 1 << 16, padding_y << 16 },
-            //     .{ 0 << 16, 0 << 16, 1 << 16 },
-            // } };
-            // c.XRenderSetPictureTransform(display, foreground.picture, &transform);
 
             c.XRenderCompositeText32(
                 display,
