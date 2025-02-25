@@ -5,9 +5,9 @@ const Buffer = @This();
 
 pub const Size = struct {
     /// Number of columns.
-    cols: u32,
+    cols: u31,
     /// Number of rows (in view).
-    rows: u32,
+    rows: u31,
     /// Number of rows (in scrollback).
     scrollback_rows: u32,
 
@@ -22,6 +22,15 @@ scrollback_row_count: u32 = 0,
 row_start: u32 = 0,
 cursor: Cursor = .{},
 cells: []Cell,
+private_modes: std.EnumSet(PrivateModes) = std.EnumSet(PrivateModes).init(.{
+    .cursor_visible = true,
+}),
+
+pub const PrivateModes = enum(u16) {
+    cursor_visible = 25,
+    alternative_screen_buffer = 1049,
+    bracketed_paste = 2004,
+};
 
 pub fn deinit(buffer: Buffer, alloc: std.mem.Allocator) void {
     alloc.free(buffer.cells);
@@ -88,11 +97,14 @@ fn wrapCursor(buffer: *Buffer) void {
         buffer.cursor.row +%= 1;
     }
     if (buffer.cursor.row >= buffer.size.rows) {
-        buffer.cursor.row -%= 1;
-        buffer.row_start +%= 1;
-        buffer.scrollback_row_count += 1;
+        const overflow = buffer.size.rows - buffer.cursor.row +| 1;
+
+        buffer.cursor.row -%= overflow;
+        buffer.row_start +%= overflow;
+
+        buffer.scrollback_row_count +|= overflow;
         if (buffer.scrollback_row_count > buffer.size.scrollback_rows) {
-            buffer.scrollback_row_count -= 1;
+            buffer.scrollback_row_count = buffer.size.scrollback_rows;
         }
 
         const cells = buffer.getRow(buffer.cursor.row);
@@ -101,8 +113,8 @@ fn wrapCursor(buffer: *Buffer) void {
 }
 
 pub const CoordinateUpdate = union(enum) {
-    abs: u16,
-    rel: i16,
+    abs: u31,
+    rel: i32,
 
     pub fn apply(update: CoordinateUpdate, coord: u31) u31 {
         switch (update) {
@@ -160,8 +172,8 @@ pub const Cursor = struct {
 pub const Cell = struct {
     pub const empty = std.mem.zeroes(Cell);
 
-    codepoint: u21,
-    style: Style,
+    codepoint: u21 = 0,
+    style: Style = .{},
 
     pub const Style = struct {
         comptime {
@@ -269,3 +281,40 @@ pub const Cell = struct {
         };
     };
 };
+
+pub fn eraseInLine(buffer: *Buffer, what: enum { right, left, all }) void {
+    const row = buffer.getRow(buffer.cursor.row);
+    switch (what) {
+        .left => @memset(row[0..buffer.cursor.col], Cell.empty),
+        .right => @memset(row[buffer.cursor.col..], Cell.empty),
+        .all => @memset(row, Cell.empty),
+    }
+}
+
+pub fn eraseInDisplay(buffer: *Buffer, what: enum { below, above, all }) void {
+    // TODO: move the erased rows into the scrollback buffer
+    switch (what) {
+        .above => for (0..buffer.cursor.row) |row| {
+            @memset(buffer.getRow(@intCast(row)), Cell.empty);
+        },
+        .below => for (buffer.cursor.row..buffer.size.rows) |row| {
+            @memset(buffer.getRow(@intCast(row)), Cell.empty);
+        },
+        .all => for (0..buffer.size.rows) |row| {
+            @memset(buffer.getRow(@intCast(row)), Cell.empty);
+        },
+    }
+}
+
+pub fn erase(buffer: *Buffer, count: u32) void {
+    const row = buffer.getRow(buffer.cursor.row);
+    const after = row[buffer.cursor.col..];
+    @memset(after[0..@min(count, after.len)], Cell.empty);
+}
+
+pub fn insertBlank(buffer: *Buffer, count: u32) void {
+    const row = buffer.getRow(buffer.cursor.row);
+    const after = row[buffer.cursor.col..];
+    std.mem.copyBackwards(Cell, after[count..], after[0 .. after.len - count]);
+    @memset(after[0..count], Cell.empty);
+}

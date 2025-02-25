@@ -18,6 +18,8 @@ pub const Command = union(enum) {
     csi: ControlSequenceInducer,
     osc: OperatingSystemControl,
     set_character_set,
+
+    set_cursor_style,
 };
 
 const ParseResult = struct {
@@ -156,7 +158,7 @@ pub fn parseCSI(bytes: []const u8, context: *Context) ParseResult {
     var csi = std.mem.zeroes(ControlSequenceInducer);
 
     var i: u32 = 2;
-    if (i < bytes.len and bytes[i] == '?') {
+    if (i < bytes.len and isIntermediate(bytes[i])) {
         csi.intermediate = bytes[i];
         i += 1;
     }
@@ -165,11 +167,23 @@ pub fn parseCSI(bytes: []const u8, context: *Context) ParseResult {
     i += len;
     if (!complete) return .{ i + 1, .incomplete };
 
+    if (i < bytes.len and isIntermediate(bytes[i])) {
+        csi.intermediate = bytes[i];
+        i += 1;
+    }
+
     if (i >= bytes.len) return .{ i + 1, .incomplete };
     csi.final = bytes[i];
     i += 1;
 
     return .{ i, .{ .csi = csi } };
+}
+
+fn isIntermediate(byte: u8) bool {
+    return switch (byte) {
+        '?', '>', ' ' => true,
+        else => false,
+    };
 }
 
 pub const OperatingSystemControl = struct {
@@ -222,7 +236,7 @@ fn parseParameterList(bytes: []const u8, context: *Context) struct { u32, bool }
                 argument +|= digit - '0';
             },
 
-            ';' => {
+            ';', ':' => {
                 context.push(if (has_digits) argument else null);
                 has_digits = false;
                 argument = 0;

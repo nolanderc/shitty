@@ -192,8 +192,8 @@ fn runEventLoop(app: *App, shell: *pty.Shell) !void {
 fn computeBufferSize(window_size: [2]u32, font: *const FontManager, scrollback: u32) !Buffer.Size {
     const metrics = font.metrics;
     return .{
-        .rows = @max(1, window_size[1] / metrics.cell_height),
-        .cols = @max(1, window_size[0] / metrics.cell_width),
+        .rows = std.math.lossyCast(u31, @max(1, window_size[1] / metrics.cell_height)),
+        .cols = std.math.lossyCast(u31, @max(1, window_size[0] / metrics.cell_width)),
         .scrollback_rows = scrollback,
     };
 }
@@ -210,8 +210,6 @@ pub const App = struct {
     input_buffer: FifoBuffer,
     /// Bytes that should be written to the shell at the next oppurtunity.
     output_buffer: FifoBuffer,
-
-    private_modes: std.EnumSet(PrivateModes) = .{},
 
     const FifoBuffer = std.fifo.LinearFifo(u8, .Dynamic);
 
@@ -317,7 +315,7 @@ pub const App = struct {
                     std.debug.assert(!aligned);
                 },
                 .invalid => {
-                    std.log.debug("invalid input: {}", .{fmtSequence});
+                    std.log.warn("invalid input: {}", .{fmtSequence});
                     app.buffer.write(std.unicode.replacement_character);
                 },
                 .ignore => {},
@@ -332,22 +330,20 @@ pub const App = struct {
                     }
                 },
 
-                .backspace => {
-                    app.buffer.setCursorPosition(.{ .col = .{ .rel = -1 } });
-                    app.buffer.write(0);
-                    app.buffer.setCursorPosition(.{ .col = .{ .rel = -1 } });
-                },
+                .backspace => app.buffer.setCursorPosition(.{ .col = .{ .rel = -1 } }),
 
                 .alert => {},
 
-                .csi => |csi| app.handleCSI(csi, &context) catch |err| {
-                    if (err == error.Unimplemented) {
-                        std.log.warn("unimplemented CSI {} {c} ({})", .{
-                            context.fmtArgs(),
-                            csi.final,
-                            fmtSequence,
-                        });
-                    }
+                .csi => |csi| {
+                    app.handleCSI(csi, &context) catch |err| {
+                        if (err == error.Unimplemented) {
+                            std.log.warn("unimplemented CSI {} {c} ({})", .{
+                                context.fmtArgs(),
+                                csi.final,
+                                fmtSequence,
+                            });
+                        }
+                    };
                 },
 
                 .osc => |osc| {
@@ -373,6 +369,11 @@ pub const App = struct {
                     }
                 },
 
+                .set_character_set => {
+                    // FIXME: figure out how to handle these. For now we only
+                    // support UTF-8.
+                },
+
                 else => std.log.warn("unimplemented escape: {} ({})", .{
                     std.json.fmt(command, .{}),
                     fmtSequence,
@@ -385,13 +386,13 @@ pub const App = struct {
         switch (csi.final) {
             'h' => {
                 const value = context.get(0, 0);
-                const mode = std.meta.intToEnum(PrivateModes, value) catch return error.Unimplemented;
-                app.private_modes.insert(mode);
+                const mode = std.meta.intToEnum(Buffer.PrivateModes, value) catch return error.Unimplemented;
+                app.buffer.private_modes.insert(mode);
             },
             'l' => {
                 const value = context.get(0, 0);
-                const mode = std.meta.intToEnum(PrivateModes, value) catch return error.Unimplemented;
-                app.private_modes.remove(mode);
+                const mode = std.meta.intToEnum(Buffer.PrivateModes, value) catch return error.Unimplemented;
+                app.buffer.private_modes.remove(mode);
             },
 
             'm' => {
@@ -457,6 +458,62 @@ pub const App = struct {
                 }
             },
 
+            '@' => {
+                const count = context.get(0, 1);
+                app.buffer.insertBlank(count);
+            },
+
+            'A' => app.buffer.setCursorPosition(.{ .row = .{ .rel = -std.math.lossyCast(i32, context.get(0, 1)) } }),
+            'B' => app.buffer.setCursorPosition(.{ .row = .{ .rel = std.math.lossyCast(i32, context.get(0, 1)) } }),
+            'C' => app.buffer.setCursorPosition(.{ .col = .{ .rel = std.math.lossyCast(i32, context.get(0, 1)) } }),
+            'D' => app.buffer.setCursorPosition(.{ .col = .{ .rel = -std.math.lossyCast(i32, context.get(0, 1)) } }),
+
+            'H' => {
+                const row: u31 = @min(context.get(0, 1) -| 1, app.buffer.size.rows);
+                const col: u31 = @min(context.get(1, 1) -| 1, app.buffer.size.cols);
+                app.buffer.setCursorPosition(.{
+                    .row = .{ .abs = row },
+                    .col = .{ .abs = col },
+                });
+            },
+
+            'J' => switch (context.get(0, 0)) {
+                0 => app.buffer.eraseInDisplay(.below),
+                1 => app.buffer.eraseInDisplay(.above),
+                2 => app.buffer.eraseInDisplay(.all),
+                else => return error.Unimplemented,
+            },
+
+            'K' => switch (context.get(0, 0)) {
+                0 => app.buffer.eraseInLine(.right),
+                1 => app.buffer.eraseInLine(.left),
+                2 => app.buffer.eraseInLine(.all),
+                else => return error.Unimplemented,
+            },
+
+            'X' => app.buffer.erase(context.get(0, 1)),
+
+            'q' => {
+                if (csi.intermediate == ' ') {
+                    const Kind = enum(u3) {
+                        default = 0,
+                        block_blink = 1,
+                        block_steady = 2,
+                        underline_blink = 3,
+                        underline_steady = 4,
+                        bar_blink = 5,
+                        bar_steady = 6,
+                    };
+
+                    const value = context.get(0, 0);
+                    const kind = std.meta.intToEnum(Kind, value) catch .default;
+                    std.log.warn("TODO: change cursor: {s} ({})", .{ @tagName(kind), value });
+                    return;
+                }
+
+                return error.Unimplemented;
+            },
+
             else => return error.Unimplemented,
         }
     }
@@ -495,8 +552,4 @@ pub const App = struct {
 
         try app.x11.redraw(app.font_manager, app.buffer);
     }
-};
-
-pub const PrivateModes = enum(u16) {
-    bracketed_paste = 2004,
 };

@@ -317,8 +317,8 @@ pub const X11 = struct {
             const foreground_colors = try alloc.alloc(Pixel, size.cols * size.rows);
             defer alloc.free(foreground_colors);
 
-            const bg_default = Buffer.Cell.Style.Color.xterm_256color_palette[0];
-            const fg_default = Buffer.Cell.Style.Color.xterm_256color_palette[15];
+            const bg_default = Buffer.Cell.Style.Color.xterm_256color_palette[15];
+            const fg_default = Buffer.Cell.Style.Color.xterm_256color_palette[0];
 
             {
                 const zone_collect_glyphs = tracy.zone(@src(), "collect glyphs");
@@ -377,8 +377,10 @@ pub const X11 = struct {
                 }
             }
 
-            const cursor_index = buffer.cursor.col + buffer.cursor.row * size.cols;
-            std.mem.swap(Pixel, &background_colors[cursor_index], &foreground_colors[cursor_index]);
+            if (buffer.private_modes.contains(.cursor_visible)) {
+                const cursor_index = buffer.cursor.col + buffer.cursor.row * size.cols;
+                std.mem.swap(Pixel, &background_colors[cursor_index], &foreground_colors[cursor_index]);
+            }
 
             const zone_composit = tracy.zone(@src(), "composit frame");
             defer zone_composit.end();
