@@ -1,3 +1,6 @@
+//! References:
+//! - https://www.x.org/releases/current/doc/renderproto/renderproto.txt
+
 const std = @import("std");
 
 const c = @import("c").includes;
@@ -85,14 +88,17 @@ pub const X11 = struct {
 
     glyphset: c.GlyphSet,
     mapped_codepoints: std.DynamicBitSetUnmanaged = .{},
+    colored_codepoints: std.DynamicBitSetUnmanaged = .{},
 
     pub fn deinit(x11: *X11) void {
         _ = c.XCloseDisplay(x11.display);
         x11.mapped_codepoints.deinit(x11.alloc);
+        x11.colored_codepoints.deinit(x11.alloc);
     }
 
     pub fn invalidateCaches(x11: *X11) void {
         x11.mapped_codepoints.unsetAll();
+        x11.colored_codepoints.unsetAll();
 
         c.XRenderFreeGlyphSet(x11.display, x11.glyphset);
         x11.glyphset = c.XRenderCreateGlyphSet(x11.display, x11.render.formats.argb32);
@@ -264,6 +270,7 @@ pub const X11 = struct {
                         const len_desired = @max(128, 2 * x11.mapped_codepoints.bit_length);
                         const len_maximum = 1 << 23;
                         try x11.mapped_codepoints.resize(alloc, @min(len_maximum, @max(len_desired, len_required)), false);
+                        try x11.colored_codepoints.resize(alloc, @min(len_maximum, @max(len_desired, len_required)), false);
                     }
                     if (x11.mapped_codepoints.isSet(index)) continue;
 
@@ -287,6 +294,7 @@ pub const X11 = struct {
                     try image_data.appendSlice(alloc, raster.bitmap.getBGRA());
 
                     x11.mapped_codepoints.set(index);
+                    x11.colored_codepoints.setValue(index, raster.flags.is_color);
                 }
             }
 
@@ -317,8 +325,8 @@ pub const X11 = struct {
             const foreground_colors = try alloc.alloc(Pixel, size.cols * size.rows);
             defer alloc.free(foreground_colors);
 
-            const bg_default = Buffer.Cell.Style.Color.xterm_256color_palette[15];
-            const fg_default = Buffer.Cell.Style.Color.xterm_256color_palette[0];
+            const bg_default = Buffer.Cell.Style.Color.xterm_256color_palette[0];
+            const fg_default = Buffer.Cell.Style.Color.xterm_256color_palette[15];
 
             {
                 const zone_collect_glyphs = tracy.zone(@src(), "collect glyphs");
@@ -339,18 +347,23 @@ pub const X11 = struct {
 
                         const style = FontManager.Style{ .bold = flags.bold, .italic = flags.italic };
 
-                        const index = GlyphIndex{
+                        const glyph_index = GlyphIndex{
                             .style = style,
                             .codepoint = cell.codepoint,
                         };
+                        const index = @as(u23, @bitCast(glyph_index));
 
-                        codepoints.appendAssumeCapacity(@as(u23, @bitCast(index)));
+                        codepoints.appendAssumeCapacity(index);
 
                         const bg = cell.style.background;
                         const fg = cell.style.foreground;
 
                         const background = if (flags.truecolor_background) bg.rgb else bg.palette.getRGB(bg_default);
-                        const foreground = if (flags.truecolor_foreground) fg.rgb else fg.palette.getRGB(fg_default);
+                        var foreground = if (flags.truecolor_foreground) fg.rgb else fg.palette.getRGB(fg_default);
+
+                        if (x11.colored_codepoints.isSet(index)) {
+                            foreground = .{ .r = 0xFF, .g = 0xFF, .b = 0xFF };
+                        }
 
                         background_colors[col + row_index * size.cols] = .{
                             .r = background.r,
@@ -420,11 +433,14 @@ pub const X11 = struct {
                 .{ .x = padding_x, .y = padding_y, .width = grid_width, .height = grid_height },
             );
 
+            const foreground_buffer = try Surface.init(display, x11.render.formats.argb32, window_width, window_height);
+            defer foreground_buffer.deinit(display);
+
             c.XRenderCompositeText32(
                 display,
                 c.PictOpOver,
                 foreground.picture,
-                background_buffer.picture,
+                foreground_buffer.picture,
                 null,
                 0,
                 0,
@@ -432,6 +448,22 @@ pub const X11 = struct {
                 0,
                 glyph_runs.items.ptr,
                 @intCast(glyph_runs.items.len),
+            );
+
+            c.XRenderComposite(
+                display,
+                c.PictOpOver,
+                foreground_buffer.picture,
+                0,
+                background_buffer.picture,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                window_width,
+                window_height,
             );
 
             c.XRenderComposite(
