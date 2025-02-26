@@ -134,11 +134,54 @@ pub const Bitmap = struct {
 
         if (bitmap.height > target_height) {
             // Finally, we perform a fractional scaling step down to the target resolution.
-            // ... TODO ...
-            logFT.warn(
-                "TODO: fractional scaling of bitmap glyph {}x{} -> {}x{}",
-                .{ bitmap.width, bitmap.height, target_width, target_height },
-            );
+
+            const source_width = bitmap.width;
+            const source_height = bitmap.height;
+
+            const area = target_width * target_height;
+
+            for (0..target_height) |row| {
+                const row_mul = row * source_height;
+                const row_base = row_mul / target_height;
+                const row_rest = row_mul % target_height;
+
+                const y0 = target_height - row_rest;
+                const y1 = row_rest;
+
+                const row0 = @min(source_height - 1, row_base);
+                const row1 = @min(source_height - 1, row_base + 1);
+
+                for (0..target_width) |col| {
+                    const col_mul = col * source_width;
+                    const col_base = col_mul / target_width;
+                    const col_rest = col_mul % target_width;
+
+                    const x0 = target_width - col_rest;
+                    const x1 = col_rest;
+
+                    const col0 = @min(source_width - 1, col_base);
+                    const col1 = @min(source_width - 1, col_base + 1);
+
+                    const src00 = bitmap.buffer[col0 + row0 * source_width];
+                    const src10 = bitmap.buffer[col1 + row0 * source_width];
+                    const src01 = bitmap.buffer[col0 + row1 * source_width];
+                    const src11 = bitmap.buffer[col1 + row1 * source_width];
+
+                    var out: Pixel = undefined;
+                    inline for (&out, src00, src10, src01, src11) |*res, px00, px10, px01, px11| {
+                        const sum =
+                            @as(u32, px00) * x0 * y0 +
+                            @as(u32, px10) * x1 * y0 +
+                            @as(u32, px01) * x0 * y1 +
+                            @as(u32, px11) * x1 * y1;
+                        res.* = @truncate(sum / area);
+                    }
+                    bitmap.buffer[col + row * target_width] = out;
+                }
+            }
+
+            bitmap.height = target_height;
+            bitmap.width = target_width;
         }
 
         // try to shrink the buffer (if possible)
