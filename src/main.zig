@@ -415,7 +415,7 @@ pub const App = struct {
 
                         inline 30...37 => |arg| {
                             brush.flags.truecolor_foreground = false;
-                            brush.foreground = Buffer.Cell.Style.Color.fromXterm256((arg - 30) & 7);
+                            brush.foreground = Buffer.Style.Color.fromXterm256((arg - 30) & 7);
                         },
                         38 => {
                             const result = handleTrueColor(context, &i) orelse break;
@@ -424,12 +424,12 @@ pub const App = struct {
                         },
                         39 => {
                             brush.flags.truecolor_foreground = false;
-                            brush.foreground = Buffer.Cell.Style.Color.fromXterm256(15);
+                            brush.foreground = Buffer.Style.Color.fromXterm256(15);
                         },
 
                         inline 40...47 => |arg| {
                             brush.flags.truecolor_background = false;
-                            brush.background = Buffer.Cell.Style.Color.fromXterm256((arg - 40) & 7);
+                            brush.background = Buffer.Style.Color.fromXterm256((arg - 40) & 7);
                         },
                         48 => {
                             const result = handleTrueColor(context, &i) orelse break;
@@ -438,16 +438,16 @@ pub const App = struct {
                         },
                         49 => {
                             brush.flags.truecolor_foreground = false;
-                            brush.foreground = Buffer.Cell.Style.Color.fromXterm256(0);
+                            brush.foreground = Buffer.Style.Color.fromXterm256(0);
                         },
 
                         inline 90...97 => |arg| {
                             brush.flags.truecolor_foreground = false;
-                            brush.foreground = Buffer.Cell.Style.Color.fromXterm256(8 + (arg - 90) & 7);
+                            brush.foreground = Buffer.Style.Color.fromXterm256(8 + (arg - 90) & 7);
                         },
                         inline 100...107 => |arg| {
                             brush.flags.truecolor_background = false;
-                            brush.background = Buffer.Cell.Style.Color.fromXterm256(8 + (arg - 100) & 7);
+                            brush.background = Buffer.Style.Color.fromXterm256(8 + (arg - 100) & 7);
                         },
 
                         else => |first| {
@@ -520,7 +520,7 @@ pub const App = struct {
 
     fn handleTrueColor(context: *const escapes.Context, index: *u32) ?struct {
         truecolor: bool,
-        color: Buffer.Cell.Style.Color,
+        color: Buffer.Style.Color,
     } {
         const mode = context.get(index.*, 0);
         index.* += 1;
@@ -537,7 +537,7 @@ pub const App = struct {
             5 => {
                 const color_index = context.get(index.*, 0);
                 index.* += 1;
-                return .{ .truecolor = false, .color = Buffer.Cell.Style.Color.fromXterm256(@truncate(color_index)) };
+                return .{ .truecolor = false, .color = Buffer.Style.Color.fromXterm256(@truncate(color_index)) };
             },
             else => {
                 std.log.warn("unrecognized color mode: {}", .{mode});

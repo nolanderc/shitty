@@ -325,12 +325,15 @@ pub const X11 = struct {
             const foreground_colors = try alloc.alloc(Pixel, size.cols * size.rows);
             defer alloc.free(foreground_colors);
 
-            const bg_default = Buffer.Cell.Style.Color.xterm_256color_palette[0];
-            const fg_default = Buffer.Cell.Style.Color.xterm_256color_palette[15];
+            const bg_default = Buffer.Style.Color.xterm_256color_palette[15];
+            const fg_default = Buffer.Style.Color.xterm_256color_palette[0];
 
             {
                 const zone_collect_glyphs = tracy.zone(@src(), "collect glyphs");
                 defer zone_collect_glyphs.end();
+
+                var background = bg_default;
+                var foreground = fg_default;
 
                 var row: i32 = 0;
                 var row_index: usize = 0;
@@ -355,14 +358,16 @@ pub const X11 = struct {
 
                         codepoints.appendAssumeCapacity(index);
 
-                        const bg = cell.style.background;
-                        const fg = cell.style.foreground;
+                        if (!cell.flags.inherit_style) {
+                            const bg = cell.style.background;
+                            const fg = cell.style.foreground;
 
-                        const background = if (flags.truecolor_background) bg.rgb else bg.palette.getRGB(bg_default);
-                        var foreground = if (flags.truecolor_foreground) fg.rgb else fg.palette.getRGB(fg_default);
+                            background = if (flags.truecolor_background) bg.rgb else bg.palette.getRGB(bg_default);
+                            foreground = if (flags.truecolor_foreground) fg.rgb else fg.palette.getRGB(fg_default);
 
-                        if (x11.colored_codepoints.isSet(index)) {
-                            foreground = .{ .r = 0xFF, .g = 0xFF, .b = 0xFF };
+                            if (x11.colored_codepoints.isSet(index)) {
+                                foreground = .{ .r = 0xFF, .g = 0xFF, .b = 0xFF };
+                            }
                         }
 
                         background_colors[col + row_index * size.cols] = .{

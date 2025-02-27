@@ -80,11 +80,13 @@ pub fn write(buffer: *Buffer, codepoint: u21) void {
         buffer.wrapCursor();
     }
 
-    var cell = Cell{ .codepoint = codepoint, .style = buffer.cursor.brush };
-    for (0..cell_width) |_| {
+    for (0..cell_width) |index| {
         const row = buffer.getRow(buffer.cursor.row);
-        row[buffer.cursor.col] = cell;
-        defer cell.codepoint = 0;
+        row[buffer.cursor.col] = .{
+            .codepoint = if (index == 0) codepoint else 0,
+            .style = buffer.cursor.brush,
+            .flags = .{ .inherit_style = index != 0 },
+        };
 
         buffer.cursor.col += 1;
         buffer.wrapCursor();
@@ -166,118 +168,130 @@ pub fn reflowInto(source: *const Buffer, target: *Buffer) void {
 pub const Cursor = struct {
     col: u31 = 0,
     row: u31 = 0,
-    brush: Cell.Style = .{},
+    brush: Style = .{},
 };
 
 pub const Cell = struct {
     pub const empty = std.mem.zeroes(Cell);
 
     codepoint: u21 = 0,
+    flags: Flags = .{},
     style: Style = .{},
 
-    pub const Style = struct {
+    pub const Flags = packed struct(u2) {
+        /// If `true`, during terminal reflowing, this cell should be on the same
+        /// line as the previous cell.
+        line_continuation: bool = false,
+
+        /// If `true`, this cell should always have the same color/attributes
+        /// as the previous cell. This is intended to be used for multi-column
+        /// glyphs.
+        inherit_style: bool = false,
+    };
+};
+
+pub const Style = struct {
+    comptime {
+        std.debug.assert(@sizeOf(Style) <= 8);
+    }
+
+    flags: Flags = .{},
+    foreground: Color = Color.default,
+    background: Color = Color.default,
+
+    pub const Flags = packed struct(u16) {
+        /// If set, the foreground is the `rgb` variant.
+        truecolor_foreground: bool = false,
+        /// If set, the background is the `rgb` variant.
+        truecolor_background: bool = false,
+
+        bold: bool = false,
+        italic: bool = false,
+        underline: bool = false,
+
+        _: u11 = 0,
+    };
+
+    pub const Color = extern union {
         comptime {
-            std.debug.assert(@sizeOf(Style) <= 8);
+            std.debug.assert(@sizeOf(Color) == 3);
         }
 
-        flags: Flags = .{},
-        foreground: Color = Color.default,
-        background: Color = Color.default,
+        palette: Palette,
+        rgb: RGB,
 
-        pub const Flags = packed struct(u16) {
-            /// If set, the foreground is the `rgb` variant.
-            truecolor_foreground: bool = false,
-            /// If set, the background is the `rgb` variant.
-            truecolor_background: bool = false,
+        pub const RGB = extern struct {
+            r: u8,
+            g: u8,
+            b: u8,
 
-            bold: bool = false,
-            italic: bool = false,
-            underline: bool = false,
-
-            _: u11 = 0,
+            pub fn gray(value: u8) RGB {
+                return .{ .r = value, .g = value, .b = value };
+            }
         };
 
-        pub const Color = extern union {
-            comptime {
-                std.debug.assert(@sizeOf(Color) == 3);
-            }
-
-            palette: Palette,
-            rgb: RGB,
-
-            pub const RGB = extern struct {
-                r: u8,
-                g: u8,
-                b: u8,
-
-                pub fn gray(value: u8) RGB {
-                    return .{ .r = value, .g = value, .b = value };
-                }
+        pub const Palette = extern struct {
+            const Kind = enum(u8) {
+                /// The default color. Exact value depends on if this is the foreground or background.
+                default = 0,
+                /// Uses the `index` field to pick a color from the `xterm-256color` palette.
+                xterm256color,
             };
 
-            pub const Palette = extern struct {
-                const Kind = enum(u8) {
-                    /// The default color. Exact value depends on if this is the foreground or background.
-                    default = 0,
-                    /// Uses the `index` field to pick a color from the `xterm-256color` palette.
-                    xterm256color,
-                };
+            kind: Kind,
+            index: u8,
 
-                kind: Kind,
-                index: u8,
+            pub fn getRGB(palette: Palette, default_color: RGB) RGB {
+                if (palette.kind == .default) return default_color;
+                return xterm_256color_palette[palette.index];
+            }
+        };
 
-                pub fn getRGB(palette: Palette, default_color: RGB) RGB {
-                    if (palette.kind == .default) return default_color;
-                    return xterm_256color_palette[palette.index];
-                }
-            };
+        pub const default: Color = std.mem.zeroes(Color);
 
-            pub const default: Color = std.mem.zeroes(Color);
+        pub fn fromXterm256(index: u8) Color {
+            return .{ .palette = .{ .kind = .xterm256color, .index = index } };
+        }
 
-            pub fn fromXterm256(index: u8) Color {
-                return .{ .palette = .{ .kind = .xterm256color, .index = index } };
+        pub fn fromRGB(r: u8, g: u8, b: 8) Color {
+            return .{ .rgb = .{ .r = r, .g = g, .b = b } };
+        }
+
+        pub const xterm_256color_palette: [256]RGB = blk: {
+            var palette: [256]RGB = undefined;
+
+            const BitsRgb = packed struct(u3) { r: bool, g: bool, b: bool };
+
+            palette[0] = .{ .r = 0, .g = 0, .b = 0 };
+            for (palette[1..8], 1..) |*rgb, index| {
+                const bits: BitsRgb = @bitCast(@as(u3, @truncate(index)));
+                rgb.r = if (bits.r) 205 else 80;
+                rgb.g = if (bits.g) 205 else 80;
+                rgb.b = if (bits.b) 225 else 80;
             }
 
-            pub fn fromRGB(r: u8, g: u8, b: 8) Color {
-                return .{ .rgb = .{ .r = r, .g = g, .b = b } };
+            for (palette[8..16], 0..) |*rgb, index| {
+                const bits: BitsRgb = @bitCast(@as(u3, @truncate(index)));
+                rgb.r = if (bits.r) 255 else 100;
+                rgb.g = if (bits.g) 255 else 100;
+                rgb.b = if (bits.b) 255 else 100;
             }
 
-            pub const xterm_256color_palette: [256]RGB = blk: {
-                var palette: [256]RGB = undefined;
+            for (palette[16..232], 0..) |*rgb, index| {
+                const b: u8 = (index / 1) % 6;
+                const g: u8 = (index / 6) % 6;
+                const r: u8 = (index / 36) % 6;
+                rgb.r = 51 * r;
+                rgb.g = 51 * g;
+                rgb.b = 51 * b;
+            }
 
-                const BitsRgb = packed struct(u3) { r: bool, g: bool, b: bool };
+            for (palette[232..256], 1..) |*rgb, index| {
+                const gray: u8 = @truncate(255 * index / 25);
+                rgb.* = RGB.gray(gray);
+            }
 
-                palette[0] = .{ .r = 0, .g = 0, .b = 0 };
-                for (palette[1..8], 1..) |*rgb, index| {
-                    const bits: BitsRgb = @bitCast(@as(u3, @truncate(index)));
-                    rgb.r = if (bits.r) 205 else 80;
-                    rgb.g = if (bits.g) 205 else 80;
-                    rgb.b = if (bits.b) 225 else 80;
-                }
-
-                for (palette[8..16], 0..) |*rgb, index| {
-                    const bits: BitsRgb = @bitCast(@as(u3, @truncate(index)));
-                    rgb.r = if (bits.r) 255 else 100;
-                    rgb.g = if (bits.g) 255 else 100;
-                    rgb.b = if (bits.b) 255 else 100;
-                }
-
-                for (palette[16..232], 0..) |*rgb, index| {
-                    const b: u8 = (index / 1) % 6;
-                    const g: u8 = (index / 6) % 6;
-                    const r: u8 = (index / 36) % 6;
-                    rgb.r = 51 * r;
-                    rgb.g = 51 * g;
-                    rgb.b = 51 * b;
-                }
-
-                for (palette[232..256], 1..) |*rgb, index| {
-                    const gray: u8 = @truncate(255 * index / 25);
-                    rgb.* = RGB.gray(gray);
-                }
-
-                break :blk palette;
-            };
+            break :blk palette;
         };
     };
 };
