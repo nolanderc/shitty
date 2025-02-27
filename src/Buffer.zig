@@ -74,21 +74,32 @@ pub fn write(buffer: *Buffer, codepoint: u21) void {
 
     if (buffer.cursor.col + cell_width > buffer.size.cols) {
         const row = buffer.getRow(buffer.cursor.row);
-        @memset(row[buffer.cursor.col..], .{ .codepoint = 0, .style = buffer.cursor.brush });
+        @memset(row[buffer.cursor.col..], .{
+            .codepoint = 0,
+            .style = buffer.cursor.brush,
+            .flags = .{ .line_continuation = buffer.cursor.anchored },
+        });
         buffer.cursor.col = 0;
         buffer.cursor.row +%= 1;
         buffer.wrapCursor();
     }
 
-    for (0..cell_width) |index| {
+    var cell = Cell{
+        .codepoint = codepoint,
+        .style = buffer.cursor.brush,
+        .flags = .{ .line_continuation = buffer.cursor.anchored },
+    };
+
+    for (0..cell_width) |_| {
         const row = buffer.getRow(buffer.cursor.row);
-        row[buffer.cursor.col] = .{
-            .codepoint = if (index == 0) codepoint else 0,
-            .style = buffer.cursor.brush,
-            .flags = .{ .inherit_style = index != 0 },
-        };
+        row[buffer.cursor.col] = cell;
+        defer {
+            cell.codepoint = 0;
+            cell.flags = .{ .inherit_style = true, .line_continuation = true };
+        }
 
         buffer.cursor.col += 1;
+        buffer.cursor.anchored = true;
         buffer.wrapCursor();
     }
 }
@@ -102,7 +113,8 @@ fn wrapCursor(buffer: *Buffer) void {
         const overflow = buffer.size.rows - buffer.cursor.row +| 1;
 
         buffer.cursor.row -%= overflow;
-        buffer.row_start +%= overflow;
+        buffer.row_start = buffer.size.rowsTotal() +
+            (buffer.row_start + overflow) % buffer.size.rowsTotal();
 
         buffer.scrollback_row_count +|= overflow;
         if (buffer.scrollback_row_count > buffer.size.scrollback_rows) {
@@ -135,32 +147,29 @@ pub fn setCursorPosition(
 ) void {
     buffer.cursor.col = update.col.apply(buffer.cursor.col);
     buffer.cursor.row = update.row.apply(buffer.cursor.row);
+    buffer.cursor.anchored = false;
     buffer.wrapCursor();
 }
 
 pub fn reflowInto(source: *const Buffer, target: *Buffer) void {
-    std.log.warn("TODO: reflow lines", .{});
+    var source_row = source.row_start - source.scrollback_row_count;
 
-    var source_row = source.row_start -% source.scrollback_row_count;
-    var target_row = target.row_start;
+    for (0..source.scrollback_row_count + source.cursor.row + 1) |_| {
+        defer source_row +%= 1;
 
-    for (0..source.scrollback_row_count + source.cursor.row + 1) |index| {
-        if (index > 0) {
-            target.cursor.row += 1;
-            target.wrapCursor();
+        var source_cells = source.getRowAbs(source_row);
+        while (source_cells.len != 0 and source_cells[source_cells.len - 1].codepoint == 0) {
+            source_cells.len -= 1;
         }
 
-        defer source_row +%= 1;
-        defer target_row +%= 1;
+        for (source_cells, 0..) |cell, col| {
+            if (col == 0 and !cell.flags.line_continuation) {
+                target.setCursorPosition(.{ .row = .{ .rel = 1 }, .col = .{ .abs = 0 } });
+            }
 
-        const source_cells = source.getRowAbs(source_row);
-        const target_cells = target.getRowAbs(target_row);
-        const count = @min(source_cells.len, target_cells.len);
-        @memcpy(target_cells[0..count], source_cells[0..count]);
-
-        if (source_row == source.getRowAbsIndex(source.cursor.row)) {
-            target.cursor.col = source.cursor.col;
-            target.wrapCursor();
+            target.cursor.brush = cell.style;
+            target.cursor.anchored = cell.flags.line_continuation;
+            target.write(cell.codepoint);
         }
     }
 }
@@ -169,6 +178,7 @@ pub const Cursor = struct {
     col: u31 = 0,
     row: u31 = 0,
     brush: Style = .{},
+    anchored: bool = false,
 };
 
 pub const Cell = struct {
