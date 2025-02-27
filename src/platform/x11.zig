@@ -396,8 +396,14 @@ pub const X11 = struct {
             }
 
             if (buffer.private_modes.contains(.cursor_visible)) {
-                const cursor_index = buffer.cursor.col + buffer.cursor.row * size.cols;
-                std.mem.swap(Pixel, &background_colors[cursor_index], &foreground_colors[cursor_index]);
+                if (buffer.cursor.col < size.cols and buffer.cursor.row < size.rows) {
+                    const cursor_index = buffer.cursor.col + buffer.cursor.row * size.cols;
+                    std.mem.swap(
+                        Pixel,
+                        &background_colors[cursor_index],
+                        &foreground_colors[cursor_index],
+                    );
+                }
             }
 
             const zone_composit = tracy.zone(@src(), "composit frame");

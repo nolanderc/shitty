@@ -101,7 +101,6 @@ pub fn write(buffer: *Buffer, codepoint: u21) void {
 
         buffer.cursor.col += 1;
         buffer.cursor.anchored = true;
-        buffer.wrapCursor();
     }
 }
 
