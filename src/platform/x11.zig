@@ -115,7 +115,7 @@ pub const X11 = struct {
     pub fn getDisplayScale(x11: *X11) !f32 {
         _ = x11; // autofix
         // TODO: determine properly
-        return 2.0;
+        return 1.0;
     }
 
     pub fn setWindowTitle(x11: *X11, title: [:0]const u8) void {
@@ -364,6 +364,10 @@ pub const X11 = struct {
 
                             background = if (flags.truecolor_background) bg.rgb else bg.palette.getRGB(bg_default);
                             foreground = if (flags.truecolor_foreground) fg.rgb else fg.palette.getRGB(fg_default);
+
+                            if (cell.style.flags.inverse) {
+                                std.mem.swap(Buffer.Style.Color.RGB, &background, &foreground);
+                            }
 
                             if (x11.colored_codepoints.isSet(index)) {
                                 foreground = .{ .r = 0xFF, .g = 0xFF, .b = 0xFF };

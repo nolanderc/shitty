@@ -27,6 +27,11 @@ private_modes: std.EnumSet(PrivateModes) = std.EnumSet(PrivateModes).init(.{
     .cursor_visible = true,
 }),
 
+scroll_margins: struct {
+    top: u31 = 0,
+    bot: u31 = std.math.maxInt(u31),
+} = .{},
+
 pub const PrivateModes = enum(u16) {
     cursor_visible = 25,
     alternative_screen_buffer = 1049,
@@ -64,7 +69,7 @@ fn getRowAbsIndex(buffer: Buffer, relative: i32) u32 {
     return buffer.row_start +% @as(u32, @bitCast(relative));
 }
 
-fn getRowAbs(buffer: Buffer, row_abs: u32) []Cell {
+fn getRowAbs(buffer: Buffer, row_abs: usize) []Cell {
     const row_rel = row_abs % buffer.size.rowsTotal();
     return buffer.cells[row_rel * buffer.size.cols ..][0..buffer.size.cols];
 }
@@ -221,8 +226,9 @@ pub const Style = struct {
         bold: bool = false,
         italic: bool = false,
         underline: bool = false,
+        inverse: bool = false,
 
-        _: u11 = 0,
+        _: u10 = 0,
     };
 
     pub const Color = extern union {
@@ -333,13 +339,63 @@ pub fn eraseInDisplay(buffer: *Buffer, what: enum { below, above, all }) void {
     }
 }
 
-pub fn erase(buffer: *Buffer, count: u32) void {
+pub fn deleteLines(buffer: *Buffer, count: u32) void {
+    if (count == 0) return;
+
+    const top = @min(buffer.scroll_margins.top, buffer.size.rows);
+    const bot = @min(buffer.scroll_margins.bot, buffer.size.rows);
+
+    var target = @max(buffer.cursor.row, top);
+    var source = @min(target +| count, bot);
+
+    while (source < bot) {
+        defer target += 1;
+        defer source += 1;
+
+        const target_cells = buffer.getRow(target);
+        const source_cells = buffer.getRow(source);
+        @memcpy(target_cells, source_cells);
+        @memset(source_cells, Cell.empty);
+    }
+}
+
+pub fn insertLinesBlank(buffer: *Buffer, count: u32, where: enum { top, cursor }) void {
+    if (count == 0) return;
+
+    const top = @min(if (where == .top) buffer.scroll_margins.top else buffer.cursor.row, buffer.size.rows);
+    const bot = @min(buffer.scroll_margins.bot, buffer.size.rows);
+
+    var source = @max(top, @as(u31, @truncate(bot -| count)));
+    var target = @max(top, bot);
+
+    while (top < source) {
+        source -= 1;
+        target -= 1;
+        const source_cells = buffer.getRow(source);
+        const target_cells = buffer.getRow(target);
+        @memcpy(target_cells, source_cells);
+        @memset(source_cells, Cell.empty);
+    }
+}
+
+pub fn eraseCharacters(buffer: *Buffer, count: u32) void {
     const row = buffer.getRow(buffer.cursor.row);
     const after = row[buffer.cursor.col..];
     @memset(after[0..@min(count, after.len)], Cell.empty);
 }
 
-pub fn insertBlank(buffer: *Buffer, count: u32) void {
+pub fn deleteCharacters(buffer: *Buffer, count: u32) void {
+    const row = buffer.getRow(buffer.cursor.row);
+    const after = row[buffer.cursor.col..];
+    std.mem.copyForwards(
+        Cell,
+        after[0 .. after.len - count],
+        after[count..],
+    );
+    @memset(after[after.len - count ..], Cell.empty);
+}
+
+pub fn insertCharactersBlank(buffer: *Buffer, count: u32) void {
     const row = buffer.getRow(buffer.cursor.row);
     const after = row[buffer.cursor.col..];
     std.mem.copyBackwards(Cell, after[count..], after[0 .. after.len - count]);

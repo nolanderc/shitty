@@ -2,7 +2,8 @@ const std = @import("std");
 const tracy = @import("tracy");
 
 pub const Command = union(enum) {
-    // the extra value gives the minimum number of bytes required
+    /// Could not parse a complete escape sequence.
+    /// The extra value gives the minimum number of bytes required.
     incomplete,
     invalid,
     ignore,
@@ -21,6 +22,26 @@ pub const Command = union(enum) {
     set_character_set,
 
     set_cursor_style,
+
+    /// Move cursor down one row, inserting a new blank line above if necessary, scrolling the content up.
+    index,
+    next_line,
+    tab_set,
+    /// Move cursor up one row, inserting a new blank line above if necessary, scrolling the content down.
+    reverse_index,
+    single_shift_select_g2,
+    single_shift_select_g3,
+    device_control_string,
+    guarded_area_start,
+    guarded_area_end,
+    start_of_string,
+    return_terminal_id,
+    string_terminator,
+    privacy_message,
+    application_program_command,
+
+    normal_keypad,
+    application_keypad,
 };
 
 const ParseResult = struct {
@@ -64,6 +85,14 @@ pub const Context = struct {
         }
     }
 
+    pub fn getOpt(context: *const Context, index: usize) ?u32 {
+        if (index < context.args_count and context.args_set.isSet(index)) {
+            return context.args[index];
+        } else {
+            return null;
+        }
+    }
+
     pub fn fmtArgs(context: *const Context) FormatterArgs {
         return .{ .context = context };
     }
@@ -104,6 +133,25 @@ pub fn parse(bytes: []const u8, context: *Context) ParseResult {
             switch (bytes[1]) {
                 '[' => return parseCSI(bytes, context),
                 ']' => return parseOSC(bytes, context),
+
+                'D' => return .{ 2, .index },
+                'E' => return .{ 2, .next_line },
+                'H' => return .{ 2, .tab_set },
+                'M' => return .{ 2, .reverse_index },
+                'N' => return .{ 2, .single_shift_select_g2 },
+                'O' => return .{ 2, .single_shift_select_g3 },
+                'P' => return .{ 2, .device_control_string },
+                'V' => return .{ 2, .guarded_area_start },
+                'W' => return .{ 2, .guarded_area_end },
+                'X' => return .{ 2, .start_of_string },
+                'Z' => return .{ 2, .return_terminal_id },
+                '\\' => return .{ 2, .string_terminator },
+                '^' => return .{ 2, .privacy_message },
+                '_' => return .{ 2, .application_program_command },
+
+                '>' => return .{ 2, .normal_keypad },
+                '=' => return .{ 2, .application_keypad },
+
                 0x20...0x2f => {
                     context.clear();
                     context.push(bytes[1]);

@@ -337,6 +337,14 @@ pub const App = struct {
 
                 .alert => {},
 
+                .reverse_index => {
+                    if (app.buffer.cursor.row == app.buffer.scroll_margins.top) {
+                        app.buffer.insertLinesBlank(1, .top);
+                    } else {
+                        app.buffer.setCursorPosition(.{ .row = .{ .rel = -1 } });
+                    }
+                },
+
                 .csi => |csi| {
                     app.handleCSI(csi, &context) catch |err| {
                         if (err == error.Unimplemented) {
@@ -419,6 +427,9 @@ pub const App = struct {
                         4 => brush.flags.underline = true,
                         24 => brush.flags.underline = false,
 
+                        7 => brush.flags.inverse = true,
+                        27 => brush.flags.inverse = false,
+
                         inline 30...37 => |arg| {
                             brush.flags.truecolor_foreground = false;
                             brush.foreground = Buffer.Style.Color.fromXterm256((arg - 30) & 7);
@@ -464,10 +475,7 @@ pub const App = struct {
                 }
             },
 
-            '@' => {
-                const count = context.get(0, 1);
-                app.buffer.insertBlank(count);
-            },
+            '@' => app.buffer.insertCharactersBlank(context.get(0, 1)),
 
             'A' => app.buffer.setCursorPosition(.{ .row = .{ .rel = -std.math.lossyCast(i32, context.get(0, 1)) } }),
             'B' => app.buffer.setCursorPosition(.{ .row = .{ .rel = std.math.lossyCast(i32, context.get(0, 1)) } }),
@@ -497,7 +505,13 @@ pub const App = struct {
                 else => return error.Unimplemented,
             },
 
-            'X' => app.buffer.erase(context.get(0, 1)),
+            'L' => app.buffer.insertLinesBlank(context.get(0, 1), .cursor),
+
+            'M' => app.buffer.deleteLines(context.get(0, 1)),
+
+            'P' => app.buffer.deleteCharacters(context.get(0, 1)),
+
+            'X' => app.buffer.eraseCharacters(context.get(0, 1)),
 
             'q' => {
                 if (csi.intermediate == ' ') {
@@ -518,6 +532,13 @@ pub const App = struct {
                 }
 
                 return error.Unimplemented;
+            },
+
+            'r' => {
+                const top = context.get(0, 1) -| 1;
+                const bot = context.get(1, std.math.maxInt(u32));
+                app.buffer.scroll_margins.top = std.math.lossyCast(u31, top);
+                app.buffer.scroll_margins.bot = std.math.lossyCast(u31, bot);
             },
 
             else => return error.Unimplemented,
