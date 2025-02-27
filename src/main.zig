@@ -279,6 +279,9 @@ pub const App = struct {
     }
 
     fn processInput(app: *App) !void {
+        const zone = tracy.zone(@src(), "processInput");
+        defer zone.end();
+
         var context: escapes.Context = undefined;
 
         if (app.input_buffer.count != 0) app.x11.needs_redraw = true;
@@ -291,9 +294,9 @@ pub const App = struct {
                 if (std.ascii.isPrint(byte)) {
                     app.buffer.write(byte);
                 } else {
+                    if (index == 0) break;
                     app.input_buffer.discard(index);
-                    if (index != 0) continue :process;
-                    break;
+                    continue :process;
                 }
             } else {
                 app.input_buffer.discard(bytes.len);
@@ -383,6 +386,9 @@ pub const App = struct {
     }
 
     fn handleCSI(app: *App, csi: escapes.ControlSequenceInducer, context: *const escapes.Context) !void {
+        const zone = tracy.zone(@src(), "handleCSI");
+        defer zone.end();
+
         switch (csi.final) {
             'h' => {
                 const value = context.get(0, 0);

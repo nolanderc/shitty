@@ -1,4 +1,5 @@
 const std = @import("std");
+const tracy = @import("tracy");
 
 pub const Command = union(enum) {
     // the extra value gives the minimum number of bytes required
@@ -84,6 +85,9 @@ pub const Context = struct {
 const ESC = std.ascii.control_code.esc;
 
 pub fn parse(bytes: []const u8, context: *Context) ParseResult {
+    const zone = tracy.zone(@src(), "parse escape");
+    defer zone.end();
+
     switch (bytes[0]) {
         0 => return .{ 1, .ignore },
 

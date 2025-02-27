@@ -1,5 +1,6 @@
 const std = @import("std");
 const c = @import("c").includes;
+const tracy = @import("tracy");
 
 const Buffer = @This();
 
@@ -152,6 +153,9 @@ pub fn setCursorPosition(
 }
 
 pub fn reflowInto(source: *const Buffer, target: *Buffer) void {
+    const zone = tracy.zone(@src(), "reflow");
+    defer zone.end();
+
     var source_row = source.row_start - source.scrollback_row_count;
 
     for (0..source.scrollback_row_count + source.cursor.row + 1) |_| {

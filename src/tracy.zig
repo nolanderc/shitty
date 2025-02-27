@@ -6,12 +6,12 @@ const c = @import("TracyC.h");
 pub const Zone = struct {
     ctx: if (enabled) c.TracyCZoneCtx else void,
 
-    pub fn end(z: Zone) void {
+    pub inline fn end(z: Zone) void {
         if (!enabled) return;
         c.___tracy_emit_zone_end(z.ctx);
     }
 
-    pub fn setColor(z: Zone, color: u32) void {
+    pub inline fn setColor(z: Zone, color: u32) void {
         if (!enabled) return;
         c.___tracy_emit_zone_color(z.ctx, color);
     }
