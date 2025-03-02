@@ -259,18 +259,25 @@ pub fn parseOSC(bytes: []const u8, context: *Context) ParseResult {
     const arg_min = context.args_count;
     context.push(i);
 
-    while (i < bytes.len) : (i += 1) {
+    const arg_max = while (i < bytes.len) : (i += 1) {
         switch (bytes[i]) {
-            std.ascii.control_code.stx, std.ascii.control_code.bel => break,
+            std.ascii.control_code.stx, std.ascii.control_code.bel => {
+                context.push(i);
+                i += 1;
+                break context.args_count - 1;
+            },
+            ESC => {
+                if (i + 1 < bytes.len and bytes[i + 1] == '\\') {
+                    context.push(i);
+                    i += 2;
+                    break context.args_count - 1;
+                }
+            },
             else => continue,
         }
     } else {
         return .{ i + 1, .incomplete };
-    }
-
-    const arg_max = context.args_count;
-    context.push(i);
-    i += 1;
+    };
 
     return .{ i, .{ .osc = .{ .arg_min = arg_min, .arg_max = arg_max } } };
 }

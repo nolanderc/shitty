@@ -366,14 +366,19 @@ pub const App = struct {
                     const min = context.get(osc.arg_min, 0);
                     const max = context.get(osc.arg_max, 0);
 
-                    std.debug.assert(bytes[max] == std.ascii.control_code.stx or bytes[max] == std.ascii.control_code.bel);
-                    bytes[max] = 0; // ensure null-termination (we don't need the final STX/BEL byte)
+                    std.debug.assert(bytes[max] == std.ascii.control_code.stx or
+                        bytes[max] == std.ascii.control_code.bel or
+                        bytes[max] == std.ascii.control_code.esc);
+                    bytes[max] = 0; // ensure null-termination (we don't need the final STX/BEL/ESC byte)
 
                     std.debug.assert(min <= max and max < len);
                     const text = bytes[min..max :0];
 
                     switch (code) {
                         0, 2 => _ = app.x11.setWindowTitle(text),
+                        8 => {
+                            // FIXME: handle links
+                        },
                         else => {
                             std.log.warn("unknown OSC code: {} ({})", .{ code, fmtSequence });
                         },
