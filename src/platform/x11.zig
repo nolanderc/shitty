@@ -14,6 +14,9 @@ const Key = @import("../platform.zig").Key;
 
 const log = std.log.scoped(.X11);
 
+const bg_default = Buffer.Style.Color.xterm_256color_palette[15];
+const fg_default = Buffer.Style.Color.xterm_256color_palette[0];
+
 pub fn init(alloc: std.mem.Allocator) !X11 {
     const zone = tracy.zone(@src(), "init X11");
     defer zone.end();
@@ -46,6 +49,8 @@ pub fn init(alloc: std.mem.Allocator) !X11 {
     const glyphset = c.XRenderCreateGlyphSet(display, render.formats.argb32);
     const graphics_context = c.XCreateGC(display, window, 0, null);
 
+    try setBackgroundColor(display, window, bg_default);
+
     _ = c.XMapWindow(display, window);
     _ = c.XFlush(display);
 
@@ -63,6 +68,22 @@ pub fn init(alloc: std.mem.Allocator) !X11 {
         .atoms = .{ .wm_delete = wm_delete },
         .glyphset = glyphset,
     };
+}
+
+fn setBackgroundColor(display: *c.Display, window: c.Window, color: Buffer.Style.Color.RGB) !void {
+    const screen = c.DefaultScreen(display);
+    const colormap = c.DefaultColormap(display, screen);
+
+    var xcolor = c.XColor{
+        .red = @as(u16, color.r) * 257,
+        .green = @as(u16, color.r) * 257,
+        .blue = @as(u16, color.r) * 257,
+        .flags = c.DoRed | c.DoGreen | c.DoBlue,
+    };
+    if (c.XAllocColor(display, colormap, &xcolor) == 0) return error.OutOfMemory;
+    defer _ = c.XFreeColors(display, colormap, &xcolor.pixel, 1, 0);
+
+    if (c.XSetWindowBackground(display, window, xcolor.pixel) == 0) return error.Unknown;
 }
 
 pub const Platform = X11;
@@ -141,16 +162,12 @@ pub const X11 = struct {
                 c.Expose => x11.needs_redraw = true,
 
                 c.ConfigureNotify => {
-                    const conf = &event.xconfigure;
-                    log.info("resized: {}x{}", .{ conf.width, conf.height });
-
-                    x11.window_surface.deinit(display);
                     const new_surface = try Surface.initWindow(display, x11.window);
+                    x11.window_surface.deinit(display);
                     x11.window_surface = new_surface;
 
-                    try app.updateBufferSize();
-
                     x11.needs_redraw = true;
+                    app.needs_resize = true;
                 },
 
                 c.KeyPress => {
@@ -324,9 +341,6 @@ pub const X11 = struct {
 
             const foreground_colors = try alloc.alloc(Pixel, size.cols * size.rows);
             defer alloc.free(foreground_colors);
-
-            const bg_default = Buffer.Style.Color.xterm_256color_palette[15];
-            const fg_default = Buffer.Style.Color.xterm_256color_palette[0];
 
             {
                 const zone_collect_glyphs = tracy.zone(@src(), "collect glyphs");

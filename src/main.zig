@@ -46,6 +46,7 @@ fn run(alloc: std.mem.Allocator) !void {
 
     var app = App{
         .alloc = alloc,
+        .shell = &shell,
         .x11 = &x11,
         .font_manager = &font_manager,
         .buffer = &buffer,
@@ -55,14 +56,14 @@ fn run(alloc: std.mem.Allocator) !void {
     defer app.deinit();
     try app.redraw();
 
-    try runEventLoop(&app, &shell);
+    try runEventLoop(&app);
 }
 
-fn runEventLoop(app: *App, shell: *pty.Shell) !void {
+fn runEventLoop(app: *App) !void {
     const display_file = app.x11.file();
 
     _ = try std.posix.fcntl(
-        shell.io.handle,
+        app.shell.io.handle,
         std.posix.F.SETFD,
         @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true })),
     );
@@ -85,7 +86,7 @@ fn runEventLoop(app: *App, shell: *pty.Shell) !void {
             // wait for new window events.
             .{ .fd = display_file.handle, .events = POLL.IN, .revents = 0 },
             // Wait for new input from the shell.
-            .{ .fd = shell.io.handle, .events = POLL.IN, .revents = 0 },
+            .{ .fd = app.shell.io.handle, .events = POLL.IN, .revents = 0 },
         };
 
         const poll_display = &poll_fds[0];
@@ -139,7 +140,7 @@ fn runEventLoop(app: *App, shell: *pty.Shell) !void {
 
         while (app.output_buffer.count != 0) {
             const buffer = app.output_buffer.readableSlice(0);
-            const count = shell.io.write(buffer) catch |err| blk: {
+            const count = app.shell.io.write(buffer) catch |err| blk: {
                 if (err == error.WouldBlock) break :blk 0;
                 return err;
             };
@@ -149,7 +150,7 @@ fn runEventLoop(app: *App, shell: *pty.Shell) !void {
 
         if (poll_shell.revents & POLL.IN != 0) {
             const buffer = try app.input_buffer.writableWithSize(@min(2 * largest_seen_input_size, 4 << 20));
-            const count = shell.io.read(buffer) catch |err| blk: {
+            const count = app.shell.io.read(buffer) catch |err| blk: {
                 if (err == error.WouldBlock) break :blk 0;
                 return err;
             };
@@ -201,10 +202,12 @@ fn computeBufferSize(window_size: [2]u32, font: *const FontManager, scrollback: 
 pub const App = struct {
     alloc: std.mem.Allocator,
 
+    shell: *pty.Shell,
     x11: *platform.x11.X11,
 
     font_manager: *FontManager,
     buffer: *Buffer,
+    needs_resize: bool = false,
 
     /// Bytes read from the shell, to be processed.
     input_buffer: FifoBuffer,
@@ -266,12 +269,28 @@ pub const App = struct {
     }
 
     pub fn updateBufferSize(app: *App) !void {
+        const zone = tracy.zone(@src(), "updateBufferSize");
+        defer zone.end();
+
         const window_size = try app.x11.getWindowSize();
         const new_buffer_size = try computeBufferSize(window_size, app.font_manager, app.buffer.size.scrollback_rows);
+
+        if (std.meta.eql(app.buffer.size, new_buffer_size)) return;
+
+        std.log.info("resize: {}x{}", .{ new_buffer_size.cols, new_buffer_size.rows });
+
         var new_buffer = try Buffer.init(app.alloc, new_buffer_size);
         app.buffer.reflowInto(&new_buffer);
         app.buffer.deinit(app.alloc);
         app.buffer.* = new_buffer;
+        try app.shell.setSize(.{
+            .cols = std.math.lossyCast(u16, app.buffer.size.cols),
+            .rows = std.math.lossyCast(u16, app.buffer.size.rows),
+            .pixels_x = std.math.lossyCast(u16, window_size[0]),
+            .pixels_y = std.math.lossyCast(u16, window_size[1]),
+        });
+
+        app.needs_resize = false;
     }
 
     fn send(app: *App, bytes: []const u8) !void {
@@ -281,6 +300,8 @@ pub const App = struct {
     fn processInput(app: *App) !void {
         const zone = tracy.zone(@src(), "processInput");
         defer zone.end();
+
+        if (app.needs_resize) try app.updateBufferSize();
 
         var context: escapes.Context = undefined;
 
@@ -579,6 +600,8 @@ pub const App = struct {
     }
 
     pub fn redraw(app: *App) !void {
+        if (app.needs_resize) try app.updateBufferSize();
+
         const zone = tracy.zone(@src(), "redraw");
         defer zone.end();
 

@@ -115,7 +115,7 @@ fn wrapCursor(buffer: *Buffer) void {
         buffer.cursor.row +%= 1;
     }
     if (buffer.cursor.row >= buffer.size.rows) {
-        const overflow = buffer.size.rows - buffer.cursor.row +| 1;
+        const overflow = buffer.cursor.row - buffer.size.rows +| 1;
 
         buffer.cursor.row -%= overflow;
         buffer.row_start = buffer.size.rowsTotal() +

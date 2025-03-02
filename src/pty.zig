@@ -6,24 +6,29 @@ const unix = @cImport({
     @cInclude("pwd.h");
 });
 
+const log = std.log.scoped(.PTY);
+
 pub const WindowSize = extern struct {
     rows: u16,
     cols: u16,
     pixels_x: u16,
     pixels_y: u16,
+
+    fn struct_winsize(size: WindowSize) unix.struct_winsize {
+        return unix.struct_winsize{
+            .ws_row = size.rows,
+            .ws_col = size.cols,
+            .ws_xpixel = size.pixels_x,
+            .ws_ypixel = size.pixels_y,
+        };
+    }
 };
 
 pub fn open(size: WindowSize) !Terminal {
     var master: std.fs.File = undefined;
     var child: std.fs.File = undefined;
 
-    const winsize = unix.struct_winsize{
-        .ws_row = size.rows,
-        .ws_col = size.cols,
-        .ws_xpixel = size.pixels_x,
-        .ws_ypixel = size.pixels_y,
-    };
-
+    const winsize = size.struct_winsize();
     const result = unix.openpty(&master.handle, &child.handle, null, null, &winsize);
     if (result < 0) return error.NotFound;
 
@@ -54,7 +59,7 @@ pub const Terminal = struct {
         const child = term.child;
 
         errdefer |err| {
-            std.log.err("could exec child process: {} ({})", .{
+            log.err("could exec child process: {} ({})", .{
                 err,
                 std.posix.errno(-1),
             });
@@ -77,7 +82,7 @@ pub const Terminal = struct {
         const shell = getShellPath();
         const err = std.posix.execvpeZ(shell, &.{ shell, null }, std.c.environ);
 
-        std.log.err("could not exec shell: {}", .{err});
+        log.err("could not exec shell: {}", .{err});
 
         std.c.exit(1);
     }
@@ -102,5 +107,16 @@ pub const Shell = struct {
 
     pub fn deinit(shell: Shell) void {
         shell.io.close();
+    }
+
+    pub fn setSize(shell: Shell, size: WindowSize) !void {
+        const winsize = size.struct_winsize();
+        switch (std.posix.errno(unix.ioctl(shell.io.handle, unix.TIOCSWINSZ, &winsize))) {
+            .SUCCESS => return,
+            else => |err| {
+                log.err("could not set TTY size: {s}", .{@tagName(err)});
+                return error.Unknown;
+            },
+        }
     }
 };
