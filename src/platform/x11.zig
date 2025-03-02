@@ -136,7 +136,7 @@ pub const X11 = struct {
     pub fn getDisplayScale(x11: *X11) !f32 {
         _ = x11; // autofix
         // TODO: determine properly
-        return 1.0;
+        return 2.0;
     }
 
     pub fn setWindowTitle(x11: *X11, title: [:0]const u8) void {
@@ -205,7 +205,6 @@ pub const X11 = struct {
                             .alt = event.xkey.state & c.Mod1Mask != 0,
                             .shift = event.xkey.state & c.ShiftMask != 0,
                         };
-                        log.debug("mapKey({}) = {?}", .{ keysym, mapKey(keysym) });
                         if (mapKey(keysym)) |key| {
                             if (try app.handleShortcut(mods, key)) {
                                 continue;
@@ -222,6 +221,71 @@ pub const X11 = struct {
                 c.ReparentNotify,
                 c.MapNotify,
                 => {},
+
+                c.SelectionNotify => {
+                    const selection = &event.xselection;
+
+                    if (selection.requestor != x11.window) return;
+                    if (selection.property == c.None) return;
+
+                    var actual_type: c.Atom = c.None;
+                    var format: c_int = 0;
+                    var count: c_ulong = 0;
+                    var remaining: c_ulong = 0;
+                    var data: [*c]u8 = null;
+
+                    _ = c.XGetWindowProperty(
+                        display,
+                        x11.window,
+                        selection.property,
+                        0, // offset
+                        0, // length
+                        0, // delete
+                        c.AnyPropertyType,
+                        &actual_type,
+                        &format,
+                        &count,
+                        &remaining,
+                        &data,
+                    );
+                    _ = c.XFree(data);
+
+                    if (actual_type == c.None) return;
+                    if (actual_type == c.XInternAtom(x11.display, "INCR", 0)) {
+                        log.warn("INCR selection not implemented", .{});
+                        return;
+                    }
+
+                    try app.output_buffer.write("\x1b[200~");
+
+                    var offset: c_long = 0;
+                    while (remaining > 0) {
+                        _ = c.XGetWindowProperty(
+                            display,
+                            x11.window,
+                            selection.property,
+                            offset,
+                            std.math.lossyCast(c_long, remaining),
+                            0, //
+                            c.AnyPropertyType,
+                            &actual_type,
+                            &format,
+                            &count,
+                            &remaining,
+                            &data,
+                        );
+                        defer _ = c.XFree(data);
+
+                        offset += std.math.lossyCast(c_long, count);
+
+                        // FIXME: if the bracketed paste terminator occurs in
+                        // the text, we need some way to remove/escape it.
+                        const text = data[0..count];
+                        try app.output_buffer.write(text);
+                    }
+
+                    try app.output_buffer.write("\x1b[201~");
+                },
 
                 else => log.debug("unknown event: {}", .{event.type}),
             }
@@ -316,12 +380,6 @@ pub const X11 = struct {
         const display = x11.display;
         const size = buffer.size;
 
-        const grid_width = size.cols * manager.metrics.cell_width;
-        const grid_height = size.rows * manager.metrics.cell_height;
-
-        const padding_x = (std.math.lossyCast(i32, x11.window_surface.width) -| std.math.lossyCast(i32, grid_width)) >> 1;
-        const padding_y = (std.math.lossyCast(i32, x11.window_surface.height) -| std.math.lossyCast(i32, grid_height)) >> 1;
-
         {
             const zone_missing_codepoints = tracy.zone(@src(), "detect unmapped codepoints");
             defer zone_missing_codepoints.end();
@@ -391,6 +449,12 @@ pub const X11 = struct {
                 @intCast(image_data.items.len),
             );
         }
+
+        const grid_width = size.cols * manager.metrics.cell_width;
+        const grid_height = size.rows * manager.metrics.cell_height;
+
+        const padding_x = (std.math.lossyCast(i32, x11.window_surface.width) -| std.math.lossyCast(i32, grid_width)) >> 1;
+        const padding_y = (std.math.lossyCast(i32, x11.window_surface.height) -| std.math.lossyCast(i32, grid_height)) >> 1;
 
         {
             var codepoints = try std.ArrayListUnmanaged(c_uint).initCapacity(alloc, @as(usize, size.rows) * size.cols);
@@ -580,6 +644,31 @@ pub const X11 = struct {
             defer zone_flush.end();
             _ = c.XFlush(display);
         }
+    }
+
+    /// Requests the contents of the clipboard to be returned in the event loop.
+    /// If this fails for any reason (e.g., the clipboard is empty) this returns `false`.
+    /// A return value of `true` does not guarantee a paste event, only that a
+    /// request was sent.
+    pub fn requestPaste(x11: *X11) !bool {
+        const display = x11.display;
+
+        const clipboard = c.XInternAtom(display, "CLIPBOARD", 0);
+
+        if (c.XGetSelectionOwner(x11.display, clipboard) == c.None) return false;
+
+        const utf8 = c.XInternAtom(display, "UTF8_STRING", 0);
+        const property = c.None;
+        const res = c.XConvertSelection(
+            display,
+            clipboard,
+            utf8,
+            property,
+            x11.window,
+            c.CurrentTime,
+        );
+
+        return res != 0;
     }
 };
 

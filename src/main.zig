@@ -236,6 +236,7 @@ pub const App = struct {
             close_window,
             decrease_font_size,
             increase_font_size,
+            paste,
         };
 
         const Binding = struct {
@@ -247,6 +248,7 @@ pub const App = struct {
             .{ .shortcut = .{ .shift = true, .key = .escape }, .action = .close_window },
             .{ .shortcut = .{ .ctrl = true, .key = .@"1" }, .action = .decrease_font_size },
             .{ .shortcut = .{ .ctrl = true, .key = .@"2" }, .action = .increase_font_size },
+            .{ .shortcut = .{ .ctrl = true, .shift = true, .key = .V }, .action = .paste },
         };
 
         const shortcut = Shortcut{
@@ -268,9 +270,19 @@ pub const App = struct {
             .close_window => app.x11.should_close = true,
             .decrease_font_size => try app.adjustFontSize(1.0 / 1.1),
             .increase_font_size => try app.adjustFontSize(1.1),
+            .paste => {
+                if (!try app.x11.requestPaste()) {
+                    std.log.warn("clipboard empty", .{});
+                }
+            },
         }
 
         return true;
+    }
+
+    pub fn paste(app: *App, contents: []const u8) !void {
+        std.log.warn("TODO: enable bracketed paste", .{});
+        try app.output_buffer.write(contents);
     }
 
     fn adjustFontSize(app: *App, multiplier: f32) !void {
