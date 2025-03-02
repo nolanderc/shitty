@@ -225,36 +225,52 @@ pub const App = struct {
     /// shortcut was properly dispatched (preventing text input for the key) or
     /// `false` if the shortcut is unbound and should produce text.
     pub fn handleShortcut(app: *App, mods: platform.Modifiers, key: platform.Key) !bool {
-        std.log.debug("shortcut: {s}{s}{s}{s}", .{
-            if (mods.ctrl) "ctrl+" else "",
-            if (mods.alt) "alt+" else "",
-            if (mods.shift) "shift+" else "",
-            @tagName(key),
-        });
+        const Shortcut = struct {
+            ctrl: bool = false,
+            alt: bool = false,
+            shift: bool = false,
+            key: platform.Key,
+        };
 
-        switch (key) {
-            .escape => {
-                if (mods.shift) {
-                    app.x11.should_close = true;
-                    return true;
-                }
-            },
-            .@"1" => {
-                if (mods.ctrl) {
-                    try app.adjustFontSize(1.0 / 1.1);
-                    return true;
-                }
-            },
-            .@"2" => {
-                if (mods.ctrl) {
-                    try app.adjustFontSize(1.1);
-                    return true;
-                }
-            },
-            else => {},
+        const Action = union(enum) {
+            close_window,
+            decrease_font_size,
+            increase_font_size,
+        };
+
+        const Binding = struct {
+            shortcut: Shortcut,
+            action: Action,
+        };
+
+        const bindings = [_]Binding{
+            .{ .shortcut = .{ .shift = true, .key = .escape }, .action = .close_window },
+            .{ .shortcut = .{ .ctrl = true, .key = .@"1" }, .action = .decrease_font_size },
+            .{ .shortcut = .{ .ctrl = true, .key = .@"2" }, .action = .increase_font_size },
+        };
+
+        const shortcut = Shortcut{
+            .ctrl = mods.ctrl,
+            .alt = mods.alt,
+            .shift = mods.shift,
+            .key = key,
+        };
+
+        const action = for (bindings) |binding| {
+            if (std.meta.eql(binding.shortcut, shortcut)) {
+                break binding.action;
+            }
+        } else {
+            return false;
+        };
+
+        switch (action) {
+            .close_window => app.x11.should_close = true,
+            .decrease_font_size => try app.adjustFontSize(1.0 / 1.1),
+            .increase_font_size => try app.adjustFontSize(1.1),
         }
 
-        return false;
+        return true;
     }
 
     fn adjustFontSize(app: *App, multiplier: f32) !void {

@@ -40,6 +40,7 @@ pub const Key = enum {
     T,
     U,
     V,
+    W,
     X,
     Y,
     Z,
@@ -61,6 +62,8 @@ pub const Key = enum {
     @"=",
     @"-",
     @"+",
+    @"/",
+    @"\\",
     @",",
     @".",
     @"<",
@@ -68,6 +71,8 @@ pub const Key = enum {
     @":",
     @";",
     @"'",
+    @"_",
+    @"~",
     @"\"",
 
     F1,
@@ -88,4 +93,5 @@ pub const Key = enum {
     enter,
     escape,
     backspace,
+    delete,
 };
