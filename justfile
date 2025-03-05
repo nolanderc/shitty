@@ -1,7 +1,4 @@
 
-# The default shell to use when starting the terminal.
-export SHELL := "/usr/bin/bash"
-
 # Should the tracy profiler be enabled?
 TRACY := "false"
 
