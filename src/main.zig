@@ -496,7 +496,7 @@ pub const App = struct {
                         },
                         39 => {
                             brush.flags.truecolor_foreground = false;
-                            brush.foreground = Buffer.Style.Color.fromXterm256(15);
+                            brush.foreground = Buffer.Style.Color.default;
                         },
 
                         inline 40...47 => |arg| {
@@ -511,7 +511,7 @@ pub const App = struct {
                         },
                         49 => {
                             brush.flags.truecolor_foreground = false;
-                            brush.foreground = Buffer.Style.Color.fromXterm256(0);
+                            brush.foreground = Buffer.Style.Color.default;
                         },
 
                         inline 90...97 => |arg| {
