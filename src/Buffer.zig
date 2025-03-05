@@ -330,7 +330,7 @@ pub fn eraseInDisplay(buffer: *Buffer, what: enum { below, above, all }) void {
         .above => for (0..buffer.cursor.row) |row| {
             @memset(buffer.getRow(@intCast(row)), Cell.empty);
         },
-        .below => for (buffer.cursor.row..buffer.size.rows) |row| {
+        .below => for (buffer.cursor.row +| 1..buffer.size.rows) |row| {
             @memset(buffer.getRow(@intCast(row)), Cell.empty);
         },
         .all => for (0..buffer.size.rows) |row| {
