@@ -486,7 +486,8 @@ pub const App = struct {
 
                         inline 30...37 => |arg| {
                             brush.flags.truecolor_foreground = false;
-                            brush.foreground = Buffer.Style.Color.fromXterm256((arg - 30) & 7);
+                            const index = (arg - 30) & 7;
+                            brush.foreground = Buffer.Style.Color.fromXterm256(index);
                         },
                         38 => {
                             const result = handleTrueColor(context, &i) orelse break;
@@ -500,7 +501,8 @@ pub const App = struct {
 
                         inline 40...47 => |arg| {
                             brush.flags.truecolor_background = false;
-                            brush.background = Buffer.Style.Color.fromXterm256((arg - 40) & 7);
+                            const index = (arg - 40) & 7;
+                            brush.background = Buffer.Style.Color.fromXterm256(index);
                         },
                         48 => {
                             const result = handleTrueColor(context, &i) orelse break;
@@ -514,11 +516,13 @@ pub const App = struct {
 
                         inline 90...97 => |arg| {
                             brush.flags.truecolor_foreground = false;
-                            brush.foreground = Buffer.Style.Color.fromXterm256(8 + (arg - 90) & 7);
+                            const index = 8 + ((arg - 90) & 7);
+                            brush.foreground = Buffer.Style.Color.fromXterm256(index);
                         },
                         inline 100...107 => |arg| {
                             brush.flags.truecolor_background = false;
-                            brush.background = Buffer.Style.Color.fromXterm256(8 + (arg - 100) & 7);
+                            const index = 8 + ((arg - 100) & 7);
+                            brush.background = Buffer.Style.Color.fromXterm256(index);
                         },
 
                         else => |first| {

@@ -284,9 +284,9 @@ pub const Style = struct {
             palette[0] = .{ .r = 0, .g = 0, .b = 0 };
             for (palette[1..8], 1..) |*rgb, index| {
                 const bits: BitsRgb = @bitCast(@as(u3, @truncate(index)));
-                rgb.r = if (bits.r) 205 else 80;
-                rgb.g = if (bits.g) 205 else 80;
-                rgb.b = if (bits.b) 225 else 80;
+                rgb.r = if (bits.r) 205 else 50;
+                rgb.g = if (bits.g) 205 else 50;
+                rgb.b = if (bits.b) 225 else 50;
             }
 
             for (palette[8..16], 0..) |*rgb, index| {
