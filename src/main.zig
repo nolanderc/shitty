@@ -573,19 +573,9 @@ pub const App = struct {
 
             'q' => {
                 if (csi.intermediate == ' ') {
-                    const Kind = enum(u3) {
-                        default = 0,
-                        block_blink = 1,
-                        block_steady = 2,
-                        underline_blink = 3,
-                        underline_steady = 4,
-                        bar_blink = 5,
-                        bar_steady = 6,
-                    };
-
                     const value = context.get(0, 0);
-                    const kind = std.meta.intToEnum(Kind, value) catch .default;
-                    std.log.warn("TODO: change cursor: {s} ({})", .{ @tagName(kind), value });
+                    const shape = std.meta.intToEnum(Buffer.Cursor.Shape, value) catch .default;
+                    app.buffer.cursor.shape = shape;
                     return;
                 }
 

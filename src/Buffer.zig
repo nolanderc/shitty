@@ -187,6 +187,17 @@ pub const Cursor = struct {
     row: u31 = 0,
     brush: Style = .{},
     anchored: bool = false,
+    shape: Shape = .default,
+
+    pub const Shape = enum(u3) {
+        default = 0,
+        block_blink = 1,
+        block_steady = 2,
+        underline_blink = 3,
+        underline_steady = 4,
+        bar_blink = 5,
+        bar_steady = 6,
+    };
 };
 
 pub const Cell = struct {

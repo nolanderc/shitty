@@ -379,6 +379,7 @@ pub const X11 = struct {
         const alloc = x11.alloc;
         const display = x11.display;
         const size = buffer.size;
+        const metrics = manager.metrics;
 
         {
             const zone_missing_codepoints = tracy.zone(@src(), "detect unmapped codepoints");
@@ -424,8 +425,8 @@ pub const X11 = struct {
                             .width = @intCast(raster.bitmap.width),
                             .height = @intCast(raster.bitmap.height),
                             .x = @intCast(-raster.left),
-                            .y = @intCast(raster.top - manager.metrics.baseline),
-                            .xOff = @intCast(manager.metrics.cell_width),
+                            .y = @intCast(raster.top - metrics.baseline),
+                            .xOff = @intCast(metrics.cell_width),
                             .yOff = 0,
                         },
                     });
@@ -450,8 +451,8 @@ pub const X11 = struct {
             );
         }
 
-        const grid_width = size.cols * manager.metrics.cell_width;
-        const grid_height = size.rows * manager.metrics.cell_height;
+        const grid_width = size.cols * metrics.cell_width;
+        const grid_height = size.rows * metrics.cell_height;
 
         const padding_x = (std.math.lossyCast(i32, x11.window_surface.width) -| std.math.lossyCast(i32, grid_width)) >> 1;
         const padding_y = (std.math.lossyCast(i32, x11.window_surface.height) -| std.math.lossyCast(i32, grid_height)) >> 1;
@@ -534,20 +535,43 @@ pub const X11 = struct {
                         .glyphset = x11.glyphset,
                         .chars = row_start,
                         .nchars = @intCast(size.cols),
-                        .xOff = if (row_index == 0) padding_x else -@as(i32, @intCast(size.cols * manager.metrics.cell_width)),
-                        .yOff = if (row_index == 0) padding_y else @intCast(manager.metrics.cell_height),
+                        .xOff = if (row_index == 0) padding_x else -@as(i32, @intCast(size.cols * metrics.cell_width)),
+                        .yOff = if (row_index == 0) padding_y else @intCast(metrics.cell_height),
                     });
                 }
             }
 
-            if (buffer.private_modes.contains(.cursor_visible)) {
-                if (buffer.cursor.col < size.cols and buffer.cursor.row < size.rows) {
-                    const cursor_index = buffer.cursor.col + buffer.cursor.row * size.cols;
-                    std.mem.swap(
-                        Pixel,
-                        &background_colors[cursor_index],
-                        &foreground_colors[cursor_index],
-                    );
+            var cursor_rect: ?c.XRectangle = null;
+            const cursor_color = fg_default;
+
+            if (buffer.private_modes.contains(.cursor_visible)) blk: {
+                if (buffer.cursor.col >= size.cols or buffer.cursor.row >= size.rows) break :blk;
+                switch (buffer.cursor.shape) {
+                    .default, .block_blink, .block_steady => {
+                        const cursor_index = buffer.cursor.col + buffer.cursor.row * size.cols;
+                        std.mem.swap(
+                            Pixel,
+                            &background_colors[cursor_index],
+                            &foreground_colors[cursor_index],
+                        );
+                    },
+                    .underline_blink, .underline_steady => {
+                        const height = @max(2, std.math.lossyCast(c_ushort, metrics.cell_height) / 8);
+                        cursor_rect = .{
+                            .x = std.math.lossyCast(c_short, buffer.cursor.col * metrics.cell_width),
+                            .y = std.math.lossyCast(c_short, (buffer.cursor.row + 1) * metrics.cell_height - height),
+                            .width = std.math.lossyCast(c_ushort, metrics.cell_width),
+                            .height = height,
+                        };
+                    },
+                    .bar_blink, .bar_steady => {
+                        cursor_rect = .{
+                            .x = std.math.lossyCast(c_short, buffer.cursor.col * metrics.cell_width + 1),
+                            .y = std.math.lossyCast(c_short, buffer.cursor.row * metrics.cell_height),
+                            .width = 1,
+                            .height = std.math.lossyCast(c_ushort, metrics.cell_height),
+                        };
+                    },
                 }
             }
 
@@ -621,6 +645,25 @@ pub const X11 = struct {
                 window_width,
                 window_height,
             );
+
+            if (cursor_rect) |rect| {
+                const color = c.XRenderColor{
+                    .red = @as(u16, cursor_color.r) * 257,
+                    .green = @as(u16, cursor_color.g) * 257,
+                    .blue = @as(u16, cursor_color.b) * 257,
+                    .alpha = 0xFFFF,
+                };
+                c.XRenderFillRectangle(
+                    display,
+                    c.PictOpSrc,
+                    background_buffer.picture,
+                    &color,
+                    padding_x + rect.x,
+                    padding_y + rect.y,
+                    rect.width,
+                    rect.height,
+                );
+            }
 
             c.XRenderComposite(
                 display,
