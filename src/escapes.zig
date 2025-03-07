@@ -233,7 +233,7 @@ pub fn parseCSI(bytes: []const u8, context: *Context) ParseResult {
 
 fn isIntermediate(byte: u8) bool {
     return switch (byte) {
-        '?', '>', ' ' => true,
+        '?', '>', ' ', '=' => true,
         else => false,
     };
 }
