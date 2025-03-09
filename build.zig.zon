@@ -1,6 +1,7 @@
 .{
-    .name = "shitty",
+    .name = .shitty,
     .version = "0.0.0",
+    .fingerprint = 0xe26aef2f5185f05f,
     .dependencies = .{
         .tracy = .{
             .url = "git+https://github.com/wolfpld/tracy?ref=v0.11.1#5d542dc09f3d9378d005092a4ad446bd405f819a",

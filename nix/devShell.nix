@@ -5,7 +5,7 @@
 }:
 pkgs.mkShell {
   nativeBuildInputs = [
-    zig.master
+    pkgs.zig_0_14
     zls.default
 
     # Dependencies
