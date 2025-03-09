@@ -338,14 +338,22 @@ pub fn eraseInLine(buffer: *Buffer, what: enum { right, left, all }) void {
 pub fn eraseInDisplay(buffer: *Buffer, what: enum { below, above, all }) void {
     // TODO: move the erased rows into the scrollback buffer
     switch (what) {
-        .above => for (0..buffer.cursor.row) |row| {
-            @memset(buffer.getRow(@intCast(row)), Cell.empty);
+        .above => {
+            buffer.eraseInLine(.left);
+            for (0..buffer.cursor.row) |row| {
+                @memset(buffer.getRow(@intCast(row)), Cell.empty);
+            }
         },
-        .below => for (buffer.cursor.row +| 1..buffer.size.rows) |row| {
-            @memset(buffer.getRow(@intCast(row)), Cell.empty);
+        .below => {
+            buffer.eraseInLine(.right);
+            for (buffer.cursor.row +| 1..buffer.size.rows) |row| {
+                @memset(buffer.getRow(@intCast(row)), Cell.empty);
+            }
         },
-        .all => for (0..buffer.size.rows) |row| {
-            @memset(buffer.getRow(@intCast(row)), Cell.empty);
+        .all => {
+            for (0..buffer.size.rows) |row| {
+                @memset(buffer.getRow(@intCast(row)), Cell.empty);
+            }
         },
     }
 }
