@@ -397,11 +397,7 @@ pub const App = struct {
                 .csi => |csi| {
                     app.handleCSI(csi, &context) catch |err| {
                         if (err == error.Unimplemented) {
-                            std.log.warn("unimplemented CSI {} {c} ({})", .{
-                                context.fmtArgs(),
-                                csi.final,
-                                fmtSequence,
-                            });
+                            std.log.warn("unimplemented CSI {}", .{fmtSequence});
                         }
                     };
                 },
@@ -464,6 +460,8 @@ pub const App = struct {
             },
 
             'm' => {
+                if (csi.intermediate != 0) return error.Unimplemented;
+
                 const brush = &app.buffer.cursor.brush;
                 var i: u32 = 0;
                 while (i < @max(1, context.args_count)) {
@@ -587,6 +585,13 @@ pub const App = struct {
                 const bot = context.get(1, std.math.maxInt(u32));
                 app.buffer.scroll_margins.top = std.math.lossyCast(u31, top);
                 app.buffer.scroll_margins.bot = std.math.lossyCast(u31, bot);
+            },
+
+            'u' => {
+                if (csi.intermediate == '=') {
+                    std.log.warn("TODO: Kitty progressive enhancements", .{});
+                    return;
+                }
             },
 
             else => return error.Unimplemented,
