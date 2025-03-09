@@ -23,7 +23,7 @@ fn run(alloc: std.mem.Allocator) !void {
     var x11 = try platform.x11.init(alloc);
     defer x11.deinit();
 
-    const scale = x11.getDisplayScale() catch 1.0;
+    const scale = x11.getDisplayScale();
     var font_manager = try FontManager.init(alloc, "Comic Code", scale * 14.0);
     defer font_manager.deinit();
 

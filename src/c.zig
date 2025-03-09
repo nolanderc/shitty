@@ -1,6 +1,7 @@
 pub const includes = @cImport({
     @cInclude("X11/Xlib.h");
     @cInclude("X11/extensions/Xrender.h");
+    @cInclude("X11/extensions/Xrandr.h");
 
     @cInclude("fontconfig/fontconfig.h");
     @cInclude("freetype/freetype.h");

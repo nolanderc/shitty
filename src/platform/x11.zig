@@ -133,10 +133,32 @@ pub const X11 = struct {
         return getWindowGeometry(x11.display, x11.window);
     }
 
-    pub fn getDisplayScale(x11: *X11) !f32 {
-        _ = x11; // autofix
-        // TODO: determine properly
-        return 2.0;
+    pub fn getDisplayScale(x11: *X11) f32 {
+        const display = x11.display;
+
+        const resources = c.XRRGetScreenResources(display, x11.window) orelse return 1.0;
+        defer c.XRRFreeScreenResources(resources);
+
+        for (resources.*.outputs[0..@intCast(resources.*.noutput)]) |output| {
+            const output_info = c.XRRGetOutputInfo(display, resources, output) orelse continue;
+            defer c.XRRFreeOutputInfo(output_info);
+
+            if (output_info.*.crtc == 0) continue;
+
+            const crtc_info = c.XRRGetCrtcInfo(display, resources, output_info.*.crtc) orelse continue;
+            defer c.XRRFreeCrtcInfo(crtc_info);
+
+            const pp = std.math.lossyCast(f32, crtc_info.*.width) * std.math.lossyCast(f32, crtc_info.*.height);
+            const mm = std.math.lossyCast(f32, output_info.*.mm_width) * std.math.lossyCast(f32, output_info.*.mm_height);
+
+            const ppmm = @sqrt(pp / mm);
+            const factor_real = ppmm * (25.4 / 96.0);
+            const factor_quantized = @max(1.0, @round(factor_real * 12.0) / 12.0);
+
+            return factor_quantized;
+        } else {
+            return 1.0;
+        }
     }
 
     pub fn setWindowTitle(x11: *X11, title: [:0]const u8) void {

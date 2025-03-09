@@ -16,5 +16,6 @@ pkgs.mkShell {
 
     pkgs.xorg.libX11
     pkgs.xorg.libXrender
+    pkgs.xorg.libXrandr
   ];
 }
