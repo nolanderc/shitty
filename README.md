@@ -1,6 +1,6 @@
-# `shitty` - Low-latency Terminal Emulator
+# `shitty` - Low-latency Terminal Emulator for X11
 
-> The name `shitty` will be change to something less awful when more
+> The name `shitty` will be changed to something less awful when this is more
 > feature-complete and a bit less... shitty.
 
 ## Building
